@@ -1,0 +1,107 @@
+{
+  "app": ".venv/bin/python app.py",
+  "watch": {
+    "include": [
+      "**"
+    ],
+    "exclude": [
+      "README.md",
+      "cdk*.json",
+      "requirements*.txt",
+      "source.bat",
+      "**/__init__.py",
+      "**/__pycache__",
+      "tests"
+    ]
+  },
+  "context": {
+    "config": {
+      "logging": {
+        "lambda_log_level": "INFO",
+        "streamlit_log_level": "INFO"
+      },
+      "paths": {
+        "assets_folder_name": "assets",
+        "lambdas_source_folder": "code/lambdas",
+        "layers_source_folder": "code/layers",
+        "knowledgebase_destination_prefix": "knowledgebase_data_source",
+        "knowledgebase_file_name_list": [],
+        "agent_schema_destination_prefix": "agent_api_schema",
+        "fewshot_examples_path": "dynamic_examples.csv",
+        "vanna_data": "vanna_data"
+      },
+      "names": {
+        "stack_name": "adpilot-pt-peter",
+        "bedrock_agent_name": "ChatbotBedrockAgent-pt-peter",
+        "bedrock_agent_alias": "Chatbot_Agent",
+        "streamlit_lambda_function_name": "invokeAgentLambda",
+        "streamlit_export_lambda_function_name": "exportStreamlitLambda"
+      },
+      "bedrock_instructions": {
+        "agent_instruction": "ANALYZE as an intelligence-driven industry analyst with deep domain expertise. DELIVER structured, insight-rich market analysis for strategic decisions. OUTPUT a well-organized, decision-ready industry summary. EXCLUDE all internal reasoning, tool references, and API details from final answer. SYNTHESIZE evidence into actionable insights users can trust immediately. EXECUTE reasoning steps smaller than 13 with NO exceptions.",
+        "knowledgebase_instruction": "Use this for returning descriptive insights and strategic guidance directly from industry sources, market research, or user-provided data. Use it to answer qualitative and analytical questions such as 'what are the key trends', 'how is the industry evolving', or 'what are the strategic implications'.",
+        "action_group_description": "For research: /querygluetable creates internal data figure; /searchinternet finds insights; prompts user if info missing."
+      },
+      "models": {
+        "bedrock_agent_foundation_model": "us.anthropic.claude-sonnet-4-20250514-v1:0"
+      },
+      "sources": {
+        "aws_fb_mapping_region": "ap-northeast-1",
+        "glue_database": "default",
+        "athena_table_name": "invoice_data_invdate",
+        "output_s3_bucket": "adpilot360-athena-queryresult",
+        "perplexity_url": "https://api.perplexity.ai",
+        "secrets_manager_name": "AdPilot-Demo",
+        "secrets_manager_name_pplx": "AdPilot-Demo-pplx",
+        "vanna": {
+          "vanna_document_index": "vanna_document_index",
+          "vanna_ddl_index": "vanna_ddl_index",
+          "vanna_questions_sql_index": "vanna_questions_sql_index"
+        }
+      }
+    },
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/core:target-partitions": [
+      "aws",
+      "aws-cn"
+    ],
+    "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
+    "@aws-cdk/aws-ec2:uniqueImdsv2TemplateName": true,
+    "@aws-cdk/aws-ecs:arnFormatIncludesClusterName": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
+    "@aws-cdk/aws-codepipeline:crossAccountKeyAliasStackSafeResourceName": true,
+    "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true,
+    "@aws-cdk/aws-sns-subscriptions:restrictSqsDescryption": true,
+    "@aws-cdk/aws-apigateway:disableCloudWatchRole": true,
+    "@aws-cdk/core:enablePartitionLiterals": true,
+    "@aws-cdk/aws-events:eventsTargetQueueSameAccount": true,
+    "@aws-cdk/aws-iam:standardizedServicePrincipals": true,
+    "@aws-cdk/aws-ecs:disableExplicitDeploymentControllerForCircuitBreaker": true,
+    "@aws-cdk/aws-iam:importedRoleStackSafeDefaultPolicyName": true,
+    "@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy": true,
+    "@aws-cdk/aws-route53-patters:useCertificate": true,
+    "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
+    "@aws-cdk/aws-rds:databaseProxyUniqueResourceName": true,
+    "@aws-cdk/aws-codedeploy:removeAlarmsFromDeploymentGroup": true,
+    "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
+    "@aws-cdk/aws-ec2:launchTemplateDefaultUserData": true,
+    "@aws-cdk/aws-secretsmanager:useAttachedSecretResourcePolicyForSecretTargetAttachments": true,
+    "@aws-cdk/aws-redshift:columnId": true,
+    "@aws-cdk/aws-stepfunctions-tasks:enableEmrServicePolicyV2": true,
+    "@aws-cdk/aws-ec2:restrictDefaultSecurityGroup": true,
+    "@aws-cdk/aws-apigateway:requestValidatorUniqueId": true,
+    "@aws-cdk/aws-kms:aliasNameRef": true,
+    "@aws-cdk/aws-autoscaling:generateLaunchTemplateInsteadOfLaunchConfig": true,
+    "@aws-cdk/core:includePrefixInUniqueNameGeneration": true,
+    "@aws-cdk/aws-efs:denyAnonymousAccess": true,
+    "@aws-cdk/aws-opensearchservice:enableOpensearchMultiAzWithStandby": true,
+    "@aws-cdk/aws-lambda-nodejs:useLatestRuntimeVersion": true,
+    "@aws-cdk/aws-efs:mountTargetOrderInsensitiveLogicalId": true,
+    "@aws-cdk/aws-rds:auroraClusterChangeScopeOfInstanceParameterGroupWithEachParameters": true,
+    "@aws-cdk/aws-appsync:useArnForSourceApiAssociationIdentifier": true,
+    "@aws-cdk/aws-rds:preventRenderingDeprecatedCredentials": true,
+    "@aws-cdk/aws-codepipeline-actions:useNewDefaultBranchForCodeCommitSource": true
+  }
+}

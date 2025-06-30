@@ -1,0 +1,7 @@
+aws-cdk-lib>=2.150.0
+constructs>=10.0.0,<11.0.0
+cdk-nag>=2.10.0
+
+# replace cmoney data with samples of data preprocess
+pyarrow==19.0.1
+pandas==2.2.3

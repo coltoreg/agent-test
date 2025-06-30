@@ -1,0 +1,4 @@
+*.md
+test_athena_connection.py
+test_athena_connection.py
+__pycache__/

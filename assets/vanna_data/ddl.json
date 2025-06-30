@@ -1,0 +1,3 @@
+[
+  "CREATE TABLE invoice_data_invdate (id INT PRIMARY KEY, sellerAddress VARCHAR(200), os VARCHAR(10), idfa VARCHAR(100), invDate DATE, invTime TIME, sellerName VARCHAR(100), sellerType VARCHAR(50), storeName VARCHAR(100), storeGPS_lat DECIMAL(10,7), storeGPS_lon DECIMAL(10,7), description VARCHAR(200), unit_price DECIMAL(10,2), quantity INT, amount DECIMAL(10,2), paymentMethod VARCHAR(50), gender VARCHAR(10), birthday DATE)"
+]

@@ -1,0 +1,34 @@
+[
+  {
+    "question": "查詢前10筆發票記錄",
+    "sql": "SELECT * \"FROM default\".\"\"FROM default\".\"invoice_data_invdate\"\" LIMIT 10"
+  },
+  {
+    "question": "查詢金額大於1000的發票",
+    "sql": "SELECT * FROM \"FROM default\".\"invoice_data_invdate\" WHERE amount > 1000 LIMIT 10"
+  },
+  {
+    "question": "按商店名稱統計銷售額",
+    "sql": "SELECT sellerName, SUM(amount) as total_sales FROM \"FROM default\".\"invoice_data_invdate\" GROUP BY sellerName ORDER BY total_sales DESC"
+  },
+  {
+    "question": "查詢使用信用卡支付的交易",
+    "sql": "SELECT * FROM \"FROM default\".\"invoice_data_invdate\" WHERE paymentMethod LIKE '%信用卡%'"
+  },
+  {
+    "question": "按性別統計平均消費金額",
+    "sql": "SELECT gender, AVG(amount) as avg_amount FROM \"FROM default\".\"invoice_data_invdate\" WHERE gender != 'unknown' GROUP BY gender"
+  },
+  {
+    "question": "查詢Android用戶的消費記錄",
+    "sql": "SELECT * FROM \"FROM default\".\"invoice_data_invdate\" WHERE os = 'Android'"
+  },
+  {
+    "question": "按商家類型統計交易數量",
+    "sql": "SELECT sellerType, COUNT(*) as transaction_count FROM \"FROM default\".\"invoice_data_invdate\" GROUP BY sellerType ORDER BY transaction_count DESC"
+  },
+  {
+    "question": "查詢今年的發票記錄",
+    "sql": "SELECT * FROM \"FROM default\".\"invoice_data_invdate\" WHERE YEAR(invDate) = YEAR(CURRENT_DATE)"
+  }
+]

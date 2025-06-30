@@ -1,0 +1,242 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Industry Research Assistant API",
+        "version": "1.0.0",
+        "description": "This API provides endpoints to support professional industry research analysis, including internet search, internal database querying, knowledge base retrieval, and user clarification interactions."
+    },
+    "paths": {
+        "/searchinternet": {
+            "get": {
+                "summary": "Search the Internet",
+                "description": "Searches the internet for the latest publicly available information relevant to the user's query.",
+                "operationId": "searchInternet",
+                "x-bedrock-action": true,
+                "x-bedrock-inputs": [
+                    {
+                        "name": "query",
+                        "type": "string",
+                        "description": "The search query string representing the information the user is seeking.",
+                        "required": true
+                    }
+                ],
+                "x-bedrock-outputs": [
+                    {
+                        "name": "query",
+                        "type": "string",
+                        "description": "The original search query."
+                    },
+                    {
+                        "name": "response",
+                        "type": "string",
+                        "description": "Summarized search result content retrieved from the Internet."
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "query",
+                        "in": "query",
+                        "description": "The search query string representing the information the user is seeking.",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful internet search result.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "query": {
+                                            "type": "string",
+                                            "description": "The original search query."
+                                        },
+                                        "response": {
+                                            "type": "string",
+                                            "description": "Summarized search result content retrieved from the Internet."
+                                        }
+                                    },
+                                    "required": [
+                                        "query",
+                                        "response"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request - The search query is missing or invalid."
+                    },
+                    "401": {
+                        "description": "Unauthorized - Authentication failed or missing credentials."
+                    },
+                    "403": {
+                        "description": "Forbidden - Access denied to search service."
+                    },
+                    "429": {
+                        "description": "Too Many Requests - Too many requests in a short time."
+                    },
+                    "500": {
+                        "description": "Internal Server Error - An unexpected error occurred during search processing."
+                    }
+                }
+            }
+        },
+        "/querygluetable": {
+            "post": {
+                "summary": "Process Question via Vanna",
+                "description": "Queries the internal Athena database based on user natural language input.",
+                "operationId": "querygluetable",
+                "x-bedrock-action": true,
+                "x-bedrock-inputs": [
+                    {
+                        "name": "inputText",
+                        "type": "string",
+                        "description": "User's natural language question",
+                        "required": true
+                    },
+                    {
+                        "name": "input_company",
+                        "type": "string",
+                        "description": "Company name (optional)",
+                        "required": false
+                    },
+                    {
+                        "name": "input_brand",
+                        "type": "string",
+                        "description": "Brand name (optional)",
+                        "required": false
+                    },
+                    {
+                        "name": "input_product",
+                        "type": "string",
+                        "description": "Product name (optional)",
+                        "required": false
+                    }
+                ],
+                "x-bedrock-outputs": [
+                    {
+                        "name": "vanna_result",
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title_text": {
+                                    "type": "string",
+                                    "description": "Chart title"
+                                },
+                                "img_static": {
+                                    "type": "string",
+                                    "description": "Chart's corresponding S3 location"
+                                }
+                            }
+                        },
+                        "description": "List of charts and titles returned by Vanna"
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "inputText": {
+                                        "type": "string",
+                                        "description": "User's natural language question"
+                                    },
+                                    "input_company": {
+                                        "type": "string",
+                                        "description": "Company name (optional)"
+                                    },
+                                    "input_brand": {
+                                        "type": "string",
+                                        "description": "Brand name (optional)"
+                                    },
+                                    "input_product": {
+                                        "type": "string",
+                                        "description": "Product name (optional)"
+                                    }
+                                },
+                                "required": [
+                                    "inputText"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "vanna_result": {
+                                            "$ref": "#/components/schemas/VannaResultList"
+                                        }
+                                    },
+                                    "required": [
+                                        "vanna_result"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request - Missing or invalid input."
+                    },
+                    "401": {
+                        "description": "Unauthorized - Authentication failed or missing credentials."
+                    },
+                    "403": {
+                        "description": "Forbidden - Access to the Vanna service is denied."
+                    },
+                    "429": {
+                        "description": "Too Many Requests - Request rate limit exceeded."
+                    },
+                    "500": {
+                        "description": "Internal Server Error - Unexpected error during Vanna question processing."
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "VannaResultList": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title_text": {
+                            "type": "string",
+                            "description": "Chart title"
+                        },
+                        "img_static": {
+                            "type": "string",
+                            "description": "Chart's corresponding S3 location"
+                        }
+                    }
+                }
+            }
+        },
+        "securitySchemes": {
+            "ApiKeyAuth": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-API-KEY"
+            }
+        }
+    },
+    "security": [
+        {
+            "ApiKeyAuth": []
+        }
+    ]
+}
