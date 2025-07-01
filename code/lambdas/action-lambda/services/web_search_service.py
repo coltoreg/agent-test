@@ -24,7 +24,11 @@ class WebSearchService:
 
     def __init__(self, cfg_path: str | None = None):
         self.conn = Connections()
-        self._site_map = load_industry_sites(cfg_path)
+        try:
+            self._site_map = load_industry_sites(cfg_path)
+        except Exception as e:
+            logger.warning(f"Failed to load industry sites config: {e}")
+            self._site_map = {}
 
     # -------------------------------------------------
     # PUBLIC API ―― 與舊版保持相同的 I/O 介面

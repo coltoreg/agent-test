@@ -1334,7 +1334,8 @@ class CodeStack(Stack):
 
         # 從本地建構 image 並推向 ECR
         image = ecs.ContainerImage.from_asset(
-            path.join(os.getcwd(), "code", "streamlit-app")
+            path.join(os.getcwd(), "code", "streamlit-app"),
+            platform=Platform.LINUX_AMD64,
         )
 
         # 優化後的 Fargate service 配置
@@ -1398,7 +1399,8 @@ class CodeStack(Stack):
             platform_version=ecs.FargatePlatformVersion.LATEST,
             runtime_platform=ecs.RuntimePlatform(
                 operating_system_family=ecs.OperatingSystemFamily.LINUX,
-                cpu_architecture=compatible_ecs_arch
+                #cpu_architecture=compatible_ecs_arch
+                cpu_architecture=ecs.CpuArchitecture.X86_64
             ),
             
             # 健康檢查優化
