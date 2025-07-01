@@ -326,51 +326,89 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
         ]
 
     def plotly_to_static(self, fig) -> Optional[bytes]:
-        """將 Plotly 圖表轉為靜態圖片 bytes"""
+        """跳過靜態圖片生成，直接返回 None 讓前端使用互動式圖表"""
+        logger.info("跳過靜態圖片生成，使用前端互動式圖表")
+        return None
+
+    def generate_chart_for_export(self, fig_dict: Dict, chart_id: str) -> Dict[str, Any]:
+        """為匯出功能生成圖表數據 - AWS Lambda 版本"""
         try:
-            if fig is None:
-                return None
+            if not fig_dict:
+                return {}
             
-            # 嘗試使用 kaleido 生成圖片
-            img_bytes, error = self.safe_execute(
-                pio.to_image, 
-                fig, 
-                format="png", 
-                width=1000, 
-                height=600, 
-                scale=2,
-                engine="kaleido"
-            )
+            # 不生成靜態圖片，只返回 HTML
+            chart_html = self.generate_plotly_html(fig_dict, chart_id)
             
-            if error:
-                logger.error(f"Plotly 圖片生成失敗: {error}")
-                return None
+            chart_data = {
+                "html": chart_html,
+                "config": fig_dict.get('layout', {}),
+                "data": fig_dict.get('data', []),
+                "static_image": None,  # 在 Lambda 中不生成靜態圖片
+                "chart_type": self._detect_chart_type(fig_dict)
+            }
             
-            if img_bytes is None:
-                return None
+            logger.info(f"為圖表 {chart_id} 生成數據（無靜態圖片）")
+            return chart_data
             
-            # 使用 PIL 處理圖片
-            img, error = self.safe_execute(Image.open, BytesIO(img_bytes))
-            if error:
-                logger.error(f"PIL 圖片處理失敗: {error}")
-                return img_bytes  # 返回原始 bytes
-            
-            # 轉換為 RGB 格式
-            if img.mode == 'RGBA':
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                background.paste(img, mask=img.split()[-1])
-                img = background
-            elif img.mode != 'RGB':
-                img = img.convert('RGB')
-            
-            # 儲存處理後的圖片
-            output = BytesIO()
-            img.save(output, format='PNG', quality=95, dpi=(300, 300))
-            return output.getvalue()
-        
         except Exception as e:
-            logger.error(f"生成靜態圖片時發生未預期錯誤: {str(e)}")
-            return None
+            logger.error(f"生成圖表數據失敗 {chart_id}: {str(e)}")
+            return {}
+
+    def generate_plotly_html(self, fig_dict: Dict, chart_id: str) -> str:
+        """生成 Plotly 的 HTML 代碼"""
+        try:
+            import json
+            
+            data_json = json.dumps(fig_dict.get('data', []), ensure_ascii=False)
+            layout_json = json.dumps(fig_dict.get('layout', {}), ensure_ascii=False)
+            
+            html_template = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+                <style>
+                    body {{ margin: 0; padding: 10px; }}
+                    #plotly-div {{ width: 100%; height: 400px; }}
+                </style>
+            </head>
+            <body>
+                <div id="plotly-div"></div>
+                <script>
+                    var data = {data_json};
+                    var layout = {layout_json};
+                    
+                    // 設置響應式配置
+                    layout.autosize = true;
+                    layout.margin = layout.margin || {{}};
+                    layout.margin.l = layout.margin.l || 50;
+                    layout.margin.r = layout.margin.r || 50;
+                    layout.margin.t = layout.margin.t || 50;
+                    layout.margin.b = layout.margin.b || 50;
+                    
+                    var config = {{
+                        responsive: true,
+                        displayModeBar: true,
+                        displaylogo: false,
+                        modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d']
+                    }};
+                    
+                    Plotly.newPlot('plotly-div', data, layout, config);
+                    
+                    // 響應式調整
+                    window.addEventListener('resize', function() {{
+                        Plotly.Plots.resize('plotly-div');
+                    }});
+                </script>
+            </body>
+            </html>
+            """
+            
+            return html_template.strip()
+            
+        except Exception as e:
+            logger.error(f"生成 Plotly HTML 失敗: {str(e)}")
+            return f"<div>圖表生成失敗: {str(e)}</div>"
 
     def generate_single_chart(self, question: str, uu_id_str: str, index: int) -> Dict[str, Any]:
         """生成單一圖表"""

@@ -1042,7 +1042,7 @@ class DocxExporter(Exporter):
             )
             
             # 將圖表轉換為PNG圖片
-            img_bytes = pio.to_image(fig, format="png", engine="kaleido")
+            img_bytes = pio.to_image(fig, format="png")
             
             # 使用PIL處理圖片
             img_stream = io.BytesIO(img_bytes)
