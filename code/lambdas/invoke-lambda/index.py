@@ -19,15 +19,15 @@ import os
 import re
 from typing import Any, Dict, List, Tuple
 from urllib.parse import unquote
-import io
 import time
 import random
 import uuid
 import base64
+import concurrent.futures
 
 from connections import Connections
 from utils import (
-    output_format, 
+    output_format_pt, 
     evaluation_prompt_en, 
     parse_json_from_text, 
     combine_html_from_json,
@@ -38,11 +38,11 @@ from utils import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+_CURRENT_OUTPUT_FORMAT: Dict[str, Any] = {}
+
 # ============ 環境變數 ============
 AGENT_ID: str = os.environ["AGENT_ID"]
 REGION_NAME: str = os.environ["REGION_NAME"]
-
-SUPPLY_INFO = "" # "目前未充分資料，將使用既有知識分析..."
 
 logger.info("Bedrock Agent ID: %s", AGENT_ID)
 
@@ -92,7 +92,7 @@ def build_prompt(user_input: str, topic: str, company_info: Dict[str, str]) -> s
       請以『市場概況與趨勢』的角度…」
     """
     base = "，".join(f"{k}：{v}" for k, v in company_info.items() if v.strip())
-    return f"請用searchinternet上網搜尋、querygluetable抓資料及利用knwoledge base抓資料。\n\n{base}。\n\n針對{topic}進行分析，專業地回答使用者問題：{user_input}"
+    return f"請用searchinternet上網搜尋、querygluetable抓資料及利用knwoledge base抓資料。{base}目標標題: {topic}。對此標題進行專業分析：{user_input}"
 
 
 def invoke_agent(
@@ -119,94 +119,91 @@ def invoke_agent(
 # ---------------------------------------------------------------------
 # Trace / 回應解析
 # ---------------------------------------------------------------------
-def get_agent_response(streaming_resp: Dict[str, Any], topic: str = "") -> Tuple[str, List[str], List[dict[str, str]]]:
+
+def get_agent_response(
+    streaming_resp: Dict[str, Any],
+    topic: str = "",
+) -> Tuple[str, List[str], List[Dict[str, Any]]]:
     """
-    解析 Agent Streaming Response:
-    - 回答文字 chunk
-    - 所有來源連結（KB + Perplexity）
-    - 圖表數據：[(title_text, img_html), ...]
-    
-    新增參數:
-    - topic: 分析主題，用於控制是否包含圖表來源
+    解析 Bedrock Agent Streaming Response
+    ------------------------------------------------
+    1. 回答文字 (full_text)
+    2. 來源 URI / 標題 (sources)
+    3. Vanna 圖表資料 (txt2figure_results)
     """
-    logger.info(f"get_agent_response ... topic: {topic}")
+    logger.info("get_agent_response – topic=%s", topic)
+
     if "completion" not in streaming_resp:
-        raise ValueError("Invalid response: missing 'completion' field")
+        raise ValueError("Invalid response: missing `completion` field")
 
-    traces: List[dict] = []
-    chunk_text = []
+    traces: List[Dict[str, Any]] = []
+    chunks: List[str] = []
 
+    # 逐條組裝文字 & 收集 trace
     for event in streaming_resp["completion"]:
         if "trace" in event:
-            logger.info("trace: %s", event["trace"])
             traces.append(event["trace"])
         elif "chunk" in event:
-            chunk_text.append(event["chunk"]["bytes"].decode("utf-8", "ignore"))
+            chunks.append(event["chunk"]["bytes"].decode("utf-8", "ignore"))
 
-    full_text = "".join(chunk_text)
+    full_text = "".join(chunks)
 
-    # 收集所有來源（Knowledge Base + Perplexity）
+    # ==== 收集來源 ====
     sources: List[str] = []
+    try:
+        sources += extract_source_list_from_kb(traces)
+    except Exception as e:
+        logger.warning("extract KB refs error: %s", e)
 
     try:
-        kb_sources = extract_source_list_from_kb(traces)
-        sources.extend(kb_sources)
-        if kb_sources:
-            logger.info("✓ Extracted %d KB references", len(kb_sources))
-    except Exception as err:
-        logger.warning("⚠️ Extract KB refs failed: %s", err)
+        sources += extract_source_list_from_perplexity(traces)
+    except Exception as e:
+        logger.warning("extract web refs error: %s", e)
 
+    # ==== 解析 Vanna 圖表 ====
     try:
-        web_sources = extract_source_list_from_perplexity(traces)
-        sources.extend(web_sources)
-        if web_sources:
-            logger.info("✓ Extracted %d Perplexity sources", len(web_sources))
-    except Exception as err:
-        logger.warning("⚠️ Extract Perplexity refs failed: %s", err)
+        txt2figure_results = extract_txt2figure_result_from_traces(traces)
+    except Exception as e:
+        logger.warning("extract Athena refs error: %s", e)
+        txt2figure_results = []
 
-    # 根據主題決定是否將圖表來源加入 sources
-    try:
-        txt2figure_result = extract_txt2figure_result_from_traces(traces)
-        
-        # 只有在"市場概況與趨勢"主題時才將圖表來源加入 sources
-        if topic == "市場概況與趨勢":
-            # 從圖表數據中提取 title_text 作為來源
-            chart_sources = [chart["title_text"] for chart in txt2figure_result]
-            sources.extend(chart_sources)
-            logger.info("✓ Extracted %d Athena reference (included in sources)", len(chart_sources))
-        else:
-            logger.info("✓ Extracted %d Athena reference (excluded from sources due to topic: %s)", 
-                    len(txt2figure_result), topic)
-            
-    except Exception as err:
-        logger.warning("⚠️ Extract Athena refs failed: %s", err)
-        txt2figure_result = []
+    # 僅在指定主題時，把「成功取得圖檔」的標題也列入來源
+    if topic == "市場概況與趨勢":
+        chart_sources = [
+            c["title_text"]
+            for c in txt2figure_results
+            if c.get("img_html") and (
+                (isinstance(c["img_html"], dict) and c["img_html"].get("bytes"))
+                or not isinstance(c["img_html"], dict)  # str / S3 URL 視為成功
+            )
+        ]
+        sources.extend(chart_sources)
+        logger.info("added %d chart titles into sources", len(chart_sources))
 
-    return full_text, sources, txt2figure_result
+    return full_text, sources, txt2figure_results
 
 # ---------------------------------------------------------------------
 # Athena-Txt2Figure 來源處理
 # ---------------------------------------------------------------------
 def extract_txt2figure_result_from_traces(traces: List[dict]) -> List[Dict[str, Any]]:
-    """
-    若 trace 中包含 ACTION_GROUP，擷取 Figure-HTML 片段。
-    確保 img_static 字段從 base64 字符串還原為 bytes
-    主函數：從traces中提取txt2figure結果，職責：協調整個提取流程
-    """
     try:
         for trace in traces:
             logger.info("extract_figure_from_traces - trace: %s", trace)
-            
+
             vanna_result = _extract_vanna_result_from_trace(trace)
             if vanna_result:
                 processed_result = _process_vanna_result(vanna_result)
-                return _add_title_suffix(processed_result)
-        
+                # 先補 suffix，再過濾沒有真正標題的
+                with_suffix  = _add_title_suffix(processed_result)
+                filtered_res = _filter_result_valid_title(with_suffix)
+                return filtered_res
+
         return []
-        
+
     except Exception as err:
         logger.warning("⚠️ Extract Athena refs failed: %s", err)
         return []
+
 
 def _extract_vanna_result_from_trace(trace: dict) -> list | None:
     """
@@ -267,57 +264,82 @@ def _extract_vanna_result_from_trace(trace: dict) -> list | None:
 
     return None
 
-def _process_vanna_result(vanna_result: list) -> List[dict]:
+# ======================================== 讀取 vanna 儲存的圖片
+def _parse_s3_uri(uri: str) -> Tuple[str, str]:
     """
-    職責：處理vanna_result，將base64字符串還原為bytes
-    等同於原始的 restore_bytes_from_base64 函數功能
+    將 s3:// 或 https://<bucket>.s3.<region>.amazonaws.com/key
+    解析成 (bucket, key)。不負責下載。
     """
-    def restore_bytes_from_base64(obj):
-        """
-        將 base64 字符串還原為 bytes，遞歸處理嵌套結構
-        """
-        if isinstance(obj, dict):
-            result = {}
-            for k, v in obj.items():
-                if k == "img_static" and isinstance(v, str) and v:
-                    logger.info("正在下載 S3 圖片: %s", v)
-                    # v 已是 S3 位置，例：
-                    #   https://my-bucket.s3.amazonaws.com/vanna/abcd.png
+    logger.debug("Parsing S3 URI: %s", uri)
+
+    if uri.startswith("s3://"):
+        bucket, key = uri.replace("s3://", "", 1).split("/", 1)
+    else:
+        m = re.match(r"https://([^.]*)\.s3[.-][^/]+/(.+)", uri)
+        if not m:
+            logger.error("Unsupported S3 URI format: %s", uri)
+            raise ValueError(f"Unsupported S3 URI format: {uri}")
+        bucket, key = m.group(1), m.group(2)
+
+    logger.debug("Parsed -> bucket=%s, key=%s", bucket, key)
+    return bucket, key
+
+def _download_from_s3(bucket: str, key: str) -> bytes:
+    response = s3_client_fbmapping.get_object(Bucket=bucket, Key=key)
+    ctype = response.get("ContentType", "")
+    logger.debug("Content-Type: %s", ctype)
+
+    # 只接受 text/html；其他類型可視情況丟警告/例外
+    if not ctype.startswith("text/html"):
+        logger.warning("Object %s 並非 HTML（Content-Type=%s）", key, ctype)
+    return response["Body"].read()
+
+def _fetch_s3_object_as_bytes(uri: str) -> bytes:
+    """
+    對外 API：輸入 S3 URI/URL，返回 bytes。
+    內部只做「解析 + 下載」兩步組合，方便之後換成策略 pattern。
+    """
+    bucket, key = _parse_s3_uri(uri)
+    return _download_from_s3(bucket, key)
+
+def _process_vanna_result(vanna_result: List[dict]) -> List[dict]:
+    """
+    遞迴掃描 vanna_result；遇到 img_html=S3 URI 就下載，
+    並轉成 {"bytes": ..., "b64": ...}。
+    """
+
+    def _transform(node: Any) -> Any:
+        # Dict ───────────────────────────────────────────────────────────
+        if isinstance(node, dict):
+            new_node: Dict[str, Any] = {}
+            for k, v in node.items():
+                if k == "img_html" and isinstance(v, str) and v:
+                    logger.info("Fetching S3 object for key '%s': %s", k, v)
                     try:
-                        if v.startswith("s3://"):
-                            # s3://bucket/key  →  bucket, key
-                            bucket, key = v.replace("s3://", "").split("/", 1)
-                            response = s3_client_fbmapping.get_object(Bucket=bucket, Key=key)
-                            data = response["Body"].read()
-                        else:  # HTTPS 形式
-                            # 轉回 bucket、key 後直接用 boto3 下載（域名同 bucket）
-                            m = re.match(r"https://([^.]*)\.s3.*?/(.+)", v)
-                            bucket, key = m.group(1), m.group(2)
-                            response = s3_client_fbmapping.get_object(Bucket=bucket, Key=key)
-                            data = response["Body"].read()
-                        result[k] = {
-                            "bytes": data,  # Word 用
-                            "b64":  base64.b64encode(data).decode()  # 走 JSON 用
+                        raw = _fetch_s3_object_as_bytes(v)
+                        new_node[k] = {
+                            "bytes": raw,
+                            "b64": base64.b64encode(raw).decode()
                         }
-                    except Exception as e:
-                        logger.warning(f"無法下載 S3 圖片: {e}")
-                        result[k] = None
+                        logger.debug("Successfully converted '%s' (%d bytes)", k, len(raw))
+                    except Exception as exc:
+                        # 不 raise，讓後續流程不中斷
+                        logger.warning("Failed to fetch S3 object: %s", exc)
+                        new_node[k] = None
                 else:
-                    result[k] = restore_bytes_from_base64(v)
-            return result
-        elif isinstance(obj, list):
-            return [restore_bytes_from_base64(item) for item in obj]
-        else:
-            return obj
-    
-    # 還原 base64 為 bytes
-    processed_result = restore_bytes_from_base64(vanna_result)
-    logger.info("成功還原 base64 數據為 bytes")
-    
-    # 直接使用原始HTML，不進行轉換
-    logger.info("保持原始 Plotly HTML")
-    
-    return processed_result
+                    new_node[k] = _transform(v)
+            return new_node
+
+        # List ────────────────────────────────────────────────────────────
+        if isinstance(node, list):
+            return [_transform(item) for item in node]
+
+        # Scalar ──────────────────────────────────────────────────────────
+        return node
+
+    processed = _transform(vanna_result)
+    logger.info("Finished converting vanna_result (total items: %d)", len(vanna_result))
+    return processed
 
 def _add_title_suffix(result: List[dict], suffix: str = "(發票數據)") -> List[dict]:
     """
@@ -342,6 +364,19 @@ def _add_title_suffix(result: List[dict], suffix: str = "(發票數據)") -> Lis
                 item["title_text"] = f"{orig_title}{suffix}"
 
     return result
+
+def _filter_result_valid_title(result: List[dict], suffix: str = "(發票數據)") -> List[dict]:
+    """
+    只保留有「真實 title_text」的圖表  
+    - title_text 為空 → 捨棄  
+    - title_text 只剩後綴 (e.g. "(發票數據)") → 捨棄
+    """
+    return [
+        item for item in result
+        if isinstance(item, dict)
+        and item.get("title_text")
+        and item["title_text"].strip() != suffix
+    ]
 
 # ---------------------------------------------------------------------
 # Knowledge-Base 來源處理
@@ -455,10 +490,6 @@ def extract_source_list_from_perplexity(traces: List[dict]) -> List[str]:
 # ---------------------------------------------------------------------
 # Claude Sonnet – 產生 HTML/JSON 報告
 # ---------------------------------------------------------------------
-import threading
-import concurrent.futures
-from typing import List, Tuple
-
 def create_chart_placeholder(chart_id: str) -> str:
     """創建圖表佔位符，避免JSON序列化問題"""
     return f"""
@@ -479,312 +510,270 @@ def create_chart_placeholder(chart_id: str) -> str:
     </div>
     """
 
-def build_output_format(raw_analysis: str, topic: str, txt2figure_results: List[dict[str, Any]]) -> Dict[str, Any]:
-    """增強版的build_output_format，統一HTML和Word圖表插入邏輯"""
-    topic_data = output_format.get(topic)
-    if not topic_data:
+
+# ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# ------------------------------------------------------------------
+def _build_path_to_key(topic_cfg: Dict[str, Any]) -> Dict[str, str]:
+    """
+    把 output_format 的結構轉成 {完整路徑: section_key}
+    例：
+      subtopics.0           -> _00_00_產業規模與成長_header
+      subtopics.0.subsubtopics.2 -> _00_03_年度銷售變化
+    """
+    mapping = {}
+    for s_idx, s in enumerate(topic_cfg["subtopics"]):
+        sub_path = f"subtopics.{s_idx}"
+        mapping[sub_path] = f"_{s_idx:02d}_00_{s['title']}_header"
+
+        for ss_idx, ss in enumerate(s.get("subsubtopics", [])):
+            key = f"_{s_idx:02d}_{ss_idx+1:02d}_{ss['title']}"
+            mapping[f"{sub_path}.subsubtopics.{ss_idx}"] = key
+    return mapping
+
+def build_output_format(
+    raw_analysis: str,
+    topic: str,
+    txt2figure_results: List[Dict[str, Any]],
+    company_info: Dict[str, str]
+) -> Dict[str, Any]:
+    global _CURRENT_OUTPUT_FORMAT
+
+    # 依照 company_info 自動重新生成
+    if (_CURRENT_OUTPUT_FORMAT.get("_meta_company_info") != company_info):
+        _CURRENT_OUTPUT_FORMAT = output_format_pt(
+            input_company=company_info.get("企業名稱", ""),
+            input_brand=company_info.get("品牌名稱", ""),
+            input_product=company_info.get("商品名稱", ""),
+            input_product_category=company_info.get("商品類型", "")
+        )
+        _CURRENT_OUTPUT_FORMAT["_meta_company_info"] = company_info
+
+    # ------------------------------------------------------------------
+    # 驗證與基本變數
+    # ------------------------------------------------------------------
+    topic_cfg = _CURRENT_OUTPUT_FORMAT.get(topic)
+    if not topic_cfg:
         raise ValueError(f"Unsupported topic: {topic}")
-
-    result = {}
-    chart_data = {}
-    word_chart_data = {}  # 新增：Word專用圖表數據
-    subtopics = topic_data.get("subtopics", [])
-
-    # 添加大標題 - 使用特殊前綴確保在最前面
-    main_title = topic_data.get("title", topic)
-    result["_000_main_title"] = f"<h1>{main_title}</h1>"
-
-    # 收集所有任務（保持原有邏輯）
-    all_tasks = []
-    for subtopic_idx, subtopic in enumerate(subtopics):
-        subtopic_title = subtopic["title"]
-        subsubtopics = subtopic.get("subsubtopics", [])
-        
-        if not subsubtopics:
-            all_tasks.append(("subtopic", subtopic_idx, subtopic_title, None, None))
-        else:
-            for subsubtopic_idx, subsub in enumerate(subsubtopics):
-                if isinstance(subsub, dict) and 'title' in subsub:
-                    subsub_title = subsub["title"]
-                else:
-                    subsub_title = subsub
-                all_tasks.append(("subsubtopic", subtopic_idx, subtopic_title, subsubtopic_idx, subsub_title))
-
-    # 內容生成處理（保持原有邏輯）
-    if all_tasks:
-        logger.info(f"開始處理 {len(all_tasks)} 個任務（增強可靠性版本）")
-        
-        # 第一輪：正常並發處理（降低並發數以減少限流）
-        optimal_workers = min(16, len(all_tasks), 20)  # 降低並發數
-        logger.info(f"使用 {optimal_workers} 個線程並發處理任務")
-        
-        completed_results = []
-        failed_tasks = []
-        
-        def call_model_unified_enhanced(task_info):
-            try:
-                task_type, subtopic_idx, subtopic_title, subsubtopic_idx, subsubtopic_title = task_info
-                
-                # 生成唯一task_id
-                if task_type == "subtopic":
-                    task_id = f"main_{subtopic_title}_{subtopic_idx}"
-                else:
-                    task_id = f"main_{subsubtopic_title}_{subtopic_idx}_{subsubtopic_idx}"
-                
-                # 基於任務索引錯開執行時間
-                if task_type == "subtopic":
-                    global_task_idx = subtopic_idx
-                else:
-                    global_task_idx = subtopic_idx * 10 + subsubtopic_idx
-                
-                delay = (global_task_idx % 8) * 0.5
-                time.sleep(delay)
-                
-                return call_model_unified(task_info, raw_analysis, task_id)
-                
-            except Exception as e:
-                logger.error(f"任務執行失敗: {task_info}, 錯誤: {e}")
-                return None
-
-        # 第一輪執行
-        with concurrent.futures.ThreadPoolExecutor(max_workers=optimal_workers) as executor:
-            futures = [executor.submit(call_model_unified_enhanced, task_info) for task_info in all_tasks]
-            
-            for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                try:
-                    result_tuple = future.result()
-                    if result_tuple and result_tuple[5]:  # 檢查是否有有效內容
-                        completed_results.append(result_tuple)
-                        task_type, _, subtopic_title, _, target_title, _ = result_tuple
-                        display_target = target_title or f"(子標題: {subtopic_title})"
-                        logger.info(f"完成進度: {i+1}/{len(futures)} - [{task_type}] -> {display_target}")
-                    else:
-                        # 記錄失敗的任務
-                        failed_tasks.append(all_tasks[i])
-                        logger.warning(f"任務失敗，將重試: {all_tasks[i]}")
-                except Exception as e:
-                    failed_tasks.append(all_tasks[i])
-                    logger.error(f"任務執行異常: {e}")
-
-        # 第二輪：重試失敗的任務
-        if failed_tasks:
-            logger.warning(f"第一輪完成 {len(completed_results)}/{len(all_tasks)} 個任務，開始重試 {len(failed_tasks)} 個失敗任務")
-            retry_results = retry_failed_tasks(failed_tasks, raw_analysis)
-            completed_results.extend(retry_results)
-            logger.info(f"重試完成，總計成功: {len(completed_results)}/{len(all_tasks)} 個任務")
-
-        # 第三輪：為仍然失敗的任務生成fallback內容
-        successful_titles = {result[4] for result in completed_results}  # target_title
-        for task_info in all_tasks:
-            task_type, subtopic_idx, subtopic_title, subsubtopic_idx, subsubtopic_title = task_info
-            target_title = subtopic_title if task_type == "subtopic" else subsubtopic_title
-            
-            if target_title not in successful_titles:
-                logger.warning(f"為失敗任務生成fallback: {target_title}")
-                fallback_result = call_model_unified(task_info, raw_analysis, f"fallback_{target_title}")
-                if fallback_result:
-                    completed_results.append(fallback_result)
-
-        # 處理結果（修復子標題重複問題）
-        grouped_results = {}
-        for task_type, subtopic_idx, subtopic_title, subsubtopic_idx, target_title, html_content in completed_results:
-            if subtopic_title not in grouped_results:
-                grouped_results[subtopic_title] = {"subtopic_content": None, "subsubtopics": []}
-            
-            if task_type == "subtopic":
-                grouped_results[subtopic_title]["subtopic_content"] = html_content
-            else:
-                grouped_results[subtopic_title]["subsubtopics"].append((subsubtopic_idx, target_title, html_content))
-
-        # 按原始順序整理到result（修復標題位置問題）
-        for subtopic_idx, subtopic in enumerate(subtopics):
-            subtopic_title = subtopic["title"]
-            subsubtopics = subtopic.get("subsubtopics", [])
-            
-            # 關鍵修復：確保標題在正確位置，使用更精確的排序前綴
-            if subtopic_title in grouped_results:
-                prefix = get_heading_prefix(2, subtopic_idx)
-                
-                if not subsubtopics:
-                    # 沒有子子標題的情況：先添加標頭，再添加內容
-                    subtopic_content = grouped_results[subtopic_title]["subtopic_content"]
-                    if subtopic_content:
-                        # 檢查內容是否已經包含了正確格式的標題
-                        expected_header = f"<h2>{prefix} {subtopic_title}</h2>"
-                        if expected_header in subtopic_content:
-                            # 內容已包含正確標題，直接使用，使用_01確保在正確位置
-                            result[f"_{subtopic_idx:02d}_01_{subtopic_title}_content"] = subtopic_content
-                        elif f"<h2>" in subtopic_content:
-                            # 內容包含h2標題但格式不對，需要替換或移除多餘的標題
-                            import re
-                            cleaned_content = re.sub(r'<h2[^>]*>.*?</h2>', '', subtopic_content, flags=re.DOTALL)
-                            # 使用_00確保標頭在前，_01確保內容在後
-                            result[f"_{subtopic_idx:02d}_00_{subtopic_title}_header"] = expected_header
-                            result[f"_{subtopic_idx:02d}_01_{subtopic_title}_content"] = cleaned_content
-                        else:
-                            # 內容不包含標題，正常添加標頭和內容
-                            result[f"_{subtopic_idx:02d}_00_{subtopic_title}_header"] = expected_header
-                            result[f"_{subtopic_idx:02d}_01_{subtopic_title}_content"] = subtopic_content
-                        logger.info(f"已整理子標題: {subtopic_title}")
-                else:
-                    # 有子子標題的情況：先添加子標題標頭，然後處理子子標題
-                    # 使用_00確保子標題標頭在最前面
-                    result[f"_{subtopic_idx:02d}_00_{subtopic_title}_header"] = f"<h2>{prefix} {subtopic_title}</h2>"
-                    
-                    sorted_subsubtopics = sorted(grouped_results[subtopic_title]["subsubtopics"], key=lambda x: x[0])
-                    for subsubtopic_idx, subsubtopic_title, html_content in sorted_subsubtopics:
-                        # 確保子子標題內容的標題層級正確
-                        subprefix = get_heading_prefix(3, subsubtopic_idx)
-                        expected_subheader = f"<h3>{subprefix} {subsubtopic_title}</h3>"
-                        
-                        if expected_subheader in html_content:
-                            # 已包含正確的h3標題，使用01+subsubtopic_idx確保順序
-                            result[f"_{subtopic_idx:02d}_{subsubtopic_idx+1:02d}_{subsubtopic_title}"] = html_content
-                        elif f"<h3>" in html_content:
-                            # 包含h3但格式可能不對，移除後重新添加
-                            import re
-                            cleaned_subcontent = re.sub(r'<h3[^>]*>.*?</h3>', '', html_content, flags=re.DOTALL)
-                            final_subcontent = expected_subheader + cleaned_subcontent
-                            result[f"_{subtopic_idx:02d}_{subsubtopic_idx+1:02d}_{subsubtopic_title}"] = final_subcontent
-                        else:
-                            # 不包含h3標題，添加標題
-                            final_subcontent = expected_subheader + html_content
-                            result[f"_{subtopic_idx:02d}_{subsubtopic_idx+1:02d}_{subsubtopic_title}"] = final_subcontent
-                            
-                        logger.info(f"已整理子子標題: [{subtopic_title}] -> {subsubtopic_title}")
-
-    # 建立標題到key的映射，用於快速查找
-    title_to_key_mapping = {}
-    for key in result.keys():
-        parts = key.split("_")
-        if len(parts) >= 4:
-            title_name = parts[3]
-            title_to_key_mapping[title_name] = key
     
-    logger.info(f"可用的標題映射: {list(title_to_key_mapping.keys())}")
+    result: Dict[str, str] = {}
+    charts: Dict[str, Any] = {}
+    word_charts: Dict[str, List[Dict[str, Any]]] = {}
 
-    for chart_result in txt2figure_results:
-        title_text = chart_result["title_text"]
-        img_static = chart_result.get("img_static")
-        if not img_static:
-            continue
+    # 主標題
+    result["_000_main_title"] = f"<h1>{topic_cfg.get('title', topic)}</h1>"
 
-        # 處理 img_static 的不同格式（保持原有邏輯）
-        if isinstance(img_static, dict):
-            img_bytes = img_static.get("bytes")
-            img_b64 = img_static.get("b64")
-            if not img_bytes:
-                logger.warning(f"圖表數據不完整，跳過: {title_text}")
-                continue
-            if not img_b64:
-                img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-        elif isinstance(img_static, str):
-            logger.warning(f"收到未處理的 S3 URL，跳過: {img_static}")
-            continue
+    # ------------------------------------------------------------------
+    # 產生章節 HTML（Claude）
+    # ------------------------------------------------------------------
+    result.update(
+        _generate_sections_html(
+            topic_cfg=topic_cfg,
+            raw_analysis=raw_analysis,
+        )
+    )
+
+    # 生成標題 → section_key 的映射，後續插圖用
+    title_to_key = {k.split("_", 3)[3]: k for k in result}
+    path_to_key = _build_path_to_key(topic_cfg)
+
+    # ------------------------------------------------------------------
+    # 插入 Vanna 圖表
+    # ------------------------------------------------------------------
+    for chart in txt2figure_results:
+        _insert_chart(chart, result, title_to_key, path_to_key, charts, word_charts)
+
+    return {"content": result, "charts": charts, "word_charts": word_charts}
+
+
+# ==========================================================================
+# build_output_format 的輔助函式，保持在同一模組最方便維護
+# ==========================================================================
+def _generate_sections_html(
+    topic_cfg: Dict[str, Any],
+    raw_analysis: str,
+) -> Dict[str, str]:
+    """
+    多執行緒呼叫 Claude，將 output_format 的 (sub)subtopic
+    轉成 {section_key: html}。
+    """
+    sections: Dict[str, str] = {}
+    tasks: List[Tuple] = []
+
+    # --------- 1. 收集任務 ---------
+    for s_idx, s in enumerate(topic_cfg["subtopics"]):
+        if not s.get("subsubtopics"):
+            tasks.append(("subtopic", s_idx, s["title"], None, None))
         else:
-            img_bytes = img_static
-            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+            for ss_idx, ss in enumerate(s["subsubtopics"]):
+                ss_title = ss["title"] if isinstance(ss, dict) else ss
+                tasks.append(
+                    ("subsubtopic", s_idx, s["title"], ss_idx, ss_title)
+                )
 
-        # 轉成 data-URI
-        data_uri = f"data:image/png;base64,{img_b64}"
-        img_html = f'<img src="{data_uri}" style="max-width:100%;height:auto;" />'
-        chart_id = str(uuid.uuid4().hex[:8])
-        
-        # 新邏輯：根據圖表的來源資訊定位
-        target_key = None
-        
-        # 方法1：從圖表的context中尋找對應的標題
-        if "context" in chart_result:
-            context = chart_result["context"]
-            logger.info(f"圖表 '{title_text}' 的context: {context}")
-            for title_name, key in title_to_key_mapping.items():
-                if title_name in context:
-                    target_key = key
-                    logger.info(f"根據context將圖表 '{title_text}' 插入到 '{title_name}'")
-                    break
-        
-        # 方法2：從圖表的question中尋找對應的標題
-        if not target_key and "question" in chart_result:
-            question = chart_result["question"]
-            logger.info(f"圖表 '{title_text}' 的question: {question}")
-            for title_name, key in title_to_key_mapping.items():
-                if title_name in question:
-                    target_key = key
-                    logger.info(f"根據question將圖表 '{title_text}' 插入到 '{title_name}'")
-                    break
-        
-        # 方法3：嘗試從title_text本身推斷（移除後綴後比對）
-        if not target_key:
-            clean_title = title_text.replace("(發票數據)", "").strip()
-            logger.info(f"圖表清理後的標題: {clean_title}")
-            for title_name, key in title_to_key_mapping.items():
-                if title_name in clean_title or clean_title in title_name:
-                    target_key = key
-                    logger.info(f"根據清理後標題將圖表 '{title_text}' 插入到 '{title_name}'")
-                    break
-        
-        # Fallback：使用固定對應關係
-        if not target_key:
-            fig_show_subtitle = ["主導品牌銷售概況", "平價帶市場概況", "高價帶市場概況", "價格帶結構與策略定位"]
-            chart_index = txt2figure_results.index(chart_result)
-            target_subtitle = fig_show_subtitle[chart_index % len(fig_show_subtitle)]
-            
-            for key in result.keys():
-                if target_subtitle in key:
-                    target_key = key
-                    break
-            
-            if target_key:
-                logger.warning(f"使用fallback邏輯將圖表 '{title_text}' 插入到 '{target_subtitle}'")
-        
-        # 最後的fallback
-        if not target_key:
-            content_keys = [k for k in result.keys() if not k.endswith("_header")]
-            if content_keys:
-                target_key = sorted(content_keys)[0]
-                logger.warning(f"找不到合適位置，將圖表 '{title_text}' 插入到 '{target_key}'")
-            else:
-                logger.error(f"無法插入圖表 '{title_text}'，跳過此圖表")
-                continue
-        
-        if target_key:
-            # HTML圖表處理
-            html_placeholder = create_chart_placeholder(chart_id)
-            chart_data[chart_id] = {
-                "title_text": title_text,
-                "html": img_html,
-                "static": img_bytes
-            }
-            
-            # Word圖表處理
-            word_placeholder = f"[WORD_CHART_{chart_id}]"
-            
-            # 插入佔位符
-            result[target_key] += "\n" + html_placeholder + "\n"
-            result[target_key] += f"\n<div class='word-chart-placeholder'>{word_placeholder}</div>\n"
-            
-            # 保存Word圖表數據
-            page_name = extract_page_name_from_key(target_key)
-            if page_name not in word_chart_data:
-                word_chart_data[page_name] = []
+    # --------- 2. 併發呼叫 Claude ---------
+    completed: List[Tuple] = []
+    failed: List[Tuple] = []
 
-            word_chart_entry = {
-                "chart_id": chart_id,
-                "title_text": title_text,
-                "img_static_b64": img_b64,
-                "placeholder": word_placeholder,
-                "target_section": extract_page_name_from_key(target_key),
-                "target_key": target_key
-            }
-            word_chart_data[page_name].append(word_chart_entry)
-            
-            logger.info(f"成功插入圖表 '{title_text}' 到 '{target_key}'")
+    def _worker(task):
+        return call_model_unified(task, raw_analysis)
 
-    return {
-        "content": result, 
-        "charts": chart_data,
-        "word_charts": word_chart_data
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(16, len(tasks))
+    ) as exe:
+        future_to_task = {exe.submit(_worker, t): t for t in tasks}
+        for fut in concurrent.futures.as_completed(future_to_task):
+            task = future_to_task[fut]
+            try:
+                r = fut.result()
+                if r and r[5]:
+                    completed.append(r)
+                else:
+                    failed.append(task)
+            except Exception:
+                failed.append(task)
+
+    # 若仍有失敗任務，再走一次同步重試
+    for task in failed:
+        try:
+            r = call_model_unified(task, raw_analysis)
+            if r and r[5]:
+                completed.append(r)
+        except Exception:
+            pass
+
+    # --------- 3. 組裝 HTML ---------
+    # 依舊的邏輯整理 header / content，確保順序正確
+    for (
+        task_type,
+        s_idx,
+        s_title,
+        ss_idx,
+        target_title,
+        html,
+    ) in completed:
+        if task_type == "subtopic":
+            key_header = f"_{s_idx:02d}_00_{s_title}_header"
+            key_body   = f"_{s_idx:02d}_01_{s_title}_content"
+            if key_header not in sections:
+                sections[key_header] = f"<h2>{get_heading_prefix(2, s_idx)} {s_title}</h2>"
+            sections[key_body] = html
+        else:
+            parent_header = f"_{s_idx:02d}_00_{s_title}_header"
+            if parent_header not in sections:
+                sections[parent_header] = f"<h2>{get_heading_prefix(2, s_idx)} {s_title}</h2>"
+            key = f"_{s_idx:02d}_{ss_idx+1:02d}_{target_title}"
+            if not html.startswith("<h3"):
+                html = f"<h3>{get_heading_prefix(3, ss_idx)} {target_title}</h3>" + html
+            sections[key] = html
+
+    return sections
+
+
+def _insert_chart(chart, result, title_to_key, path_to_key, charts, word_charts) -> None:
+    """把單一 chart 依規則插進 HTML，並填 chart / word_charts dict"""
+    chart_id = chart.get("chart_id") or uuid.uuid4().hex[:8]
+    title_text = chart.get("title_text", f"圖表-{chart_id}")
+    img_html = chart.get("img_html")
+    if not img_html:
+        return
+    
+    # ---- 先判斷是不是 html ----
+    if isinstance(img_html, dict):                # 已經被 _process_vanna_result 下載回來
+        html_str = img_html.get("bytes", b"").decode("utf-8", "ignore")
+        chart_html = html_str                     # 直接把整份 plotly html 塞進 iframe
+        img_bytes = img_html.get("bytes")         # 保留給 Word 匯出用
+        img_b64 = None
+    elif isinstance(img_html, str) and img_html.endswith(".html"):
+        # S3 連結還沒下載；直接 iframe 指向外部檔
+        chart_html = f"<iframe src='{img_html}' style='width:100%;height:100%;border:none;'></iframe>"
+        img_bytes = None
+        img_b64 = None
+    else:
+        # 真的就是 png/jpg
+        img_bytes, img_b64 = _prepare_bytes_b64(img_html)
+        chart_html = f"<img src='data:image/png;base64,{img_b64}' style='max-width:100%;height:auto;'/>" \
+                     if img_b64 else f"<img src='{img_html}' style='max-width:100%;height:auto;'/>"
+
+    charts[chart_id] = {
+        "title_text": title_text,
+        "html": chart_html,
+        "static": img_bytes or img_html,
     }
+
+    # --- 決定放哪 ---
+    target_key = _find_target_key(chart, title_to_key, path_to_key, result)
+    if not target_key:
+        logger.error("no place for chart: %s", title_text)
+        return
+
+    # --- 寫佔位符、收資料 ---
+    html_plh = create_chart_placeholder(chart_id)
+    result[target_key] += (
+        f"\n{html_plh}\n<div class='word-chart-placeholder'>[WORD_CHART_{chart_id}]</div>\n"
+    )
+
+    page = extract_page_name_from_key(target_key)
+    word_charts.setdefault(page, []).append(
+        {
+            "chart_id": chart_id,
+            "title_text": title_text,
+            "img_html_b64": img_b64,
+            "placeholder": f"[WORD_CHART_{chart_id}]",
+            "target_section": page,
+            "target_key": target_key,
+            "target_path": chart.get("target_path", ""),
+        }
+    )
+
+
+# ==========================================================================
+# build_output_format 更小的工具函式（只做單一簡單任務）
+# ==========================================================================
+def _prepare_bytes_b64(img_html):
+    """dict/bytes/URL 統一回 (bytes, b64_str | None)"""
+    if isinstance(img_html, dict):
+        return img_html.get("bytes"), img_html.get("b64")
+    if isinstance(img_html, (bytes, bytearray)):
+        b = bytes(img_html)
+        return b, base64.b64encode(b).decode()
+    return None, None  # URL
+
+def _find_target_key(chart, title_to_key, path_to_key, result):
+    """依五層優先序找 section key"""
+
+    # 1. 直接比對 target_path
+    tp = chart.get("target_path", "")
+    if tp and tp in path_to_key:
+        return path_to_key[tp]
+
+    # 2 context
+    ctx = chart.get("context", "")
+    for t, k in title_to_key.items():
+        if t in ctx:
+            return k
+
+    # 3 question
+    q = chart.get("question", "")
+    for t, k in title_to_key.items():
+        if t in q:
+            return k
+
+    # 4 title_text
+    tt = chart.get("title_text", "").replace("(發票數據)", "").strip()
+    for t, k in title_to_key.items():
+        if tt in t or t in tt:
+            return k
+
+    # 5 fallback：第一個非 header 的 key
+    for k in sorted(result):
+        if not k.endswith("_header"):
+            return k
+    return None
+
+# ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# ------------------------------------------------------------------
 
 def extract_page_name_from_key(key: str) -> str:
     """從key中提取頁面名稱"""
@@ -800,18 +789,16 @@ def call_model_unified(task_info, raw_analysis, task_id=""):
     
     # 基於任務總索引進行錯開
     if task_type == "subtopic":
-        global_task_idx = subtopic_idx
         target_title = subtopic_title
         heading_level = 2
         prefix = get_heading_prefix(2, subtopic_idx)
-        # 新增：從 output_format 獲取對應的 prompt
+        # 從 output_format 獲取對應的 prompt
         subtopic_prompt = get_subtopic_prompt(subtopic_title)
     else:
-        global_task_idx = subtopic_idx * 10 + subsubtopic_idx
         target_title = subsubtopic_title
         heading_level = 3
         prefix = get_heading_prefix(3, subsubtopic_idx)
-        # 新增：從 output_format 獲取對應的 prompt
+        # 從 output_format 獲取對應的 prompt
         subtopic_prompt = get_subsubtopic_prompt(subtopic_title, subsubtopic_title)
     
     logger.info(f"處理任務 [{task_type}] [{subtopic_title}] -> {target_title or '(子標題內容)'}")
@@ -990,20 +977,18 @@ def get_response_invoke(system_prompt: str, raw_analysis: str, subtopic_prompt: 
     return ""
 
 def get_subtopic_prompt(subtopic_title: str) -> str:
-    """從新的 output_format 結構獲取子標題的 prompt"""
-    for main_topic, main_data in output_format.items():
+    # 直接從快取拿
+    for main_topic, main_data in _CURRENT_OUTPUT_FORMAT.items():
         for subtopic in main_data.get("subtopics", []):
             if subtopic["title"] == subtopic_title:
                 return subtopic.get("prompt", f"請分析 {subtopic_title} 相關內容")
     return f"請分析 {subtopic_title} 相關內容"
 
 def get_subsubtopic_prompt(subtopic_title: str, subsubtopic_title: str) -> str:
-    """從新的 output_format 結構獲取子子標題的 prompt"""
-    for main_topic, main_data in output_format.items():
+    for main_topic, main_data in _CURRENT_OUTPUT_FORMAT.items():
         for subtopic in main_data.get("subtopics", []):
             if subtopic["title"] == subtopic_title:
-                subsubtopics = subtopic.get("subsubtopics", [])
-                for subsub in subsubtopics:
+                for subsub in subtopic.get("subsubtopics", []):
                     if isinstance(subsub, dict) and subsub.get("title") == subsubtopic_title:
                         return subsub.get("prompt", f"請分析 {subsubtopic_title} 相關內容")
     return f"請分析 {subsubtopic_title} 相關內容"
@@ -1126,12 +1111,12 @@ def lambda_handler(event: Dict[str, Any], context):
         # 傳遞 topic 參數給 get_agent_response
         answer_raw, refs, txt2figure_results = get_agent_response(agent_resp, topic)
 
-        logger.info("Agent response: %s", answer_raw)
+        logger.debug("Agent response: %s", answer_raw)
         logger.info(f"找到 {len(txt2figure_results)} 個圖表")
 
         # 2. Format to HTML JSON with smart chart placement
         logger.info("📊 格式化內容並插入圖表...")
-        output_data = build_output_format(answer_raw, topic, txt2figure_results)
+        output_data = build_output_format(answer_raw, topic, txt2figure_results, company_info)
         
         # 3. 組合最終HTML
         html_result = combine_html_from_json(output_data["content"])

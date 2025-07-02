@@ -113,16 +113,9 @@ def get_response(user_input, session_id, selected_topic):
     """
     try:
         topic_hint = TOPIC_HINTS.get(selected_topic, "").strip()
-        subtopics = output_format.get(selected_topic, [])
-
-        # 將子標題轉為清單格式字串
-        subtopics_str = "\n".join([f"- {s}" for s in subtopics])
 
         # 最終組合為一段文字
-        combined_q = f"""{topic_hint}
-        請依下列項目提供資訊:
-        {subtopics_str}
-        {user_input}""".strip()
+        combined_q = f"""{topic_hint}{user_input}""".strip()
 
         # 準備請求 payload
         payload = build_validated_payload_invoke(
@@ -565,7 +558,7 @@ def auto_generate_if_needed(topic: str) -> None:
         return  # 已有內容
 
     # ==== 自動生成的 PROMPT ====
-    prompt = f"使用網路最新資訊及調用內部資料庫，自動生成{topic}頁內容"
+    prompt = f"我們好奇{topic}。"
 
     # 使用升級版的進度顯示
     resp = get_response(prompt, st.session_state.session_id, topic)

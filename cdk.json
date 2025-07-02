@@ -1,5 +1,5 @@
 {
-  "app": ".venv/bin/python app.py",
+  "app": ".venv\\Scripts\\python.exe app.py",
   "watch": {
     "include": [
       "**"
@@ -25,21 +25,24 @@
         "lambdas_source_folder": "code/lambdas",
         "layers_source_folder": "code/layers",
         "knowledgebase_destination_prefix": "knowledgebase_data_source",
-        "knowledgebase_file_name_list": [],
+        "knowledgebase_file_name_list": [
+          "industry_report.zip", 
+          "mackup_industry_report.zip"
+        ],
         "agent_schema_destination_prefix": "agent_api_schema",
         "fewshot_examples_path": "dynamic_examples.csv",
         "vanna_data": "vanna_data"
       },
       "names": {
-        "stack_name": "adpilot-pt-peter",
-        "bedrock_agent_name": "ChatbotBedrockAgent-pt-peter",
+        "stack_name": "adpilot-pt",
+        "bedrock_agent_name": "ChatbotBedrockAgent-pt",
         "bedrock_agent_alias": "Chatbot_Agent",
         "streamlit_lambda_function_name": "invokeAgentLambda",
         "streamlit_export_lambda_function_name": "exportStreamlitLambda"
       },
       "bedrock_instructions": {
         "agent_instruction": "ANALYZE as an intelligence-driven industry analyst with deep domain expertise. DELIVER structured, insight-rich market analysis for strategic decisions. OUTPUT a well-organized, decision-ready industry summary. EXCLUDE all internal reasoning, tool references, and API details from final answer. SYNTHESIZE evidence into actionable insights users can trust immediately. EXECUTE reasoning steps smaller than 13 with NO exceptions.",
-        "knowledgebase_instruction": "Use this for returning descriptive insights and strategic guidance directly from industry sources, market research, or user-provided data. Use it to answer qualitative and analytical questions such as 'what are the key trends', 'how is the industry evolving', or 'what are the strategic implications'.",
+        "knowledgebase_instruction": "Use this for returning descriptive insights and strategic guidance directly from industry sources, market research, or user-provided data. Use it to answer qualitative and analytical questions such as 'what are the key trends', 'how is the industry evolving', or 'what are the strategic implications'. Do NOT take irrelevant information",
         "action_group_description": "For research: /querygluetable creates internal data figure; /searchinternet finds insights; prompts user if info missing."
       },
       "models": {

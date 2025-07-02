@@ -2,7 +2,7 @@ import json, boto3, time, random
 from typing import Dict, Any
 
 MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"   # 目標 Bedrock FM
-REGION    = "us-east-1"                                   # Bedrock 佈建區域
+REGION = "us-east-1"                                   # Bedrock 佈建區域
 
 _client = boto3.client("bedrock-runtime", region_name=REGION)
 

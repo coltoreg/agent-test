@@ -15,7 +15,6 @@ logger = setup_logger(__name__)
 
 # API 路由映射表
 ROUTE_TABLE = {
-    # "/askusermissinginfo": ask_user_missing_info_handler,
     # "/querygluetable": query_glue_table_handler,
     "/searchinternet": search_internet_handler,
     "/querygluetable": vanna_question_handler

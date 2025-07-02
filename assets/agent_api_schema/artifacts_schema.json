@@ -102,20 +102,32 @@
                     {
                         "name": "input_company",
                         "type": "string",
-                        "description": "Company name (optional)",
-                        "required": false
+                        "description": "Company name",
+                        "required": true
                     },
                     {
                         "name": "input_brand",
                         "type": "string",
-                        "description": "Brand name (optional)",
-                        "required": false
+                        "description": "Brand name",
+                        "required": true
                     },
                     {
                         "name": "input_product",
                         "type": "string",
-                        "description": "Product name (optional)",
-                        "required": false
+                        "description": "Product name",
+                        "required": true
+                    },
+                    {
+                        "name": "input_product_category",
+                        "type": "string",
+                        "description": "Target Title name",
+                        "required": true
+                    },
+                    {
+                        "name": "input_target_title",
+                        "type": "string",
+                        "description": "Product name",
+                        "required": true
                     }
                 ],
                 "x-bedrock-outputs": [
@@ -129,7 +141,7 @@
                                     "type": "string",
                                     "description": "Chart title"
                                 },
-                                "img_static": {
+                                "img_html": {
                                     "type": "string",
                                     "description": "Chart's corresponding S3 location"
                                 }
@@ -151,19 +163,32 @@
                                     },
                                     "input_company": {
                                         "type": "string",
-                                        "description": "Company name (optional)"
+                                        "description": "Company name"
                                     },
                                     "input_brand": {
                                         "type": "string",
-                                        "description": "Brand name (optional)"
+                                        "description": "Brand name"
                                     },
                                     "input_product": {
                                         "type": "string",
-                                        "description": "Product name (optional)"
+                                        "description": "Product name"
+                                    },
+                                    "input_product_category": {
+                                        "type": "string",
+                                        "description": "Product Category name"
+                                    },
+                                    "input_target_title": {
+                                        "type": "string",
+                                        "description": "Target Title name"
                                     }
                                 },
                                 "required": [
-                                    "inputText"
+                                    "inputText",
+                                    "input_company",
+                                    "input_brand",
+                                    "input_product",
+                                    "input_product_category",
+                                    "input_target_title"
                                 ]
                             }
                         }
@@ -218,7 +243,7 @@
                             "type": "string",
                             "description": "Chart title"
                         },
-                        "img_static": {
+                        "img_html": {
                             "type": "string",
                             "description": "Chart's corresponding S3 location"
                         }
