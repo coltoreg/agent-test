@@ -1,5 +1,5 @@
 {
-  "app": ".venv\\Scripts\\python.exe app.py",
+  "app": ".venv/bin/python app.py",
   "watch": {
     "include": [
       "**"
@@ -34,8 +34,8 @@
         "vanna_data": "vanna_data"
       },
       "names": {
-        "stack_name": "adpilot-pt",
-        "bedrock_agent_name": "ChatbotBedrockAgent-pt",
+        "stack_name": "adpilot-pt-peter",
+        "bedrock_agent_name": "ChatbotBedrockAgent-pt-peter",
         "bedrock_agent_alias": "Chatbot_Agent",
         "streamlit_lambda_function_name": "invokeAgentLambda",
         "streamlit_export_lambda_function_name": "exportStreamlitLambda"

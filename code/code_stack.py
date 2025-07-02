@@ -2,6 +2,7 @@ import os
 import sys
 import os.path as path
 import json
+import hashlib
 from aws_cdk import (
     CustomResource,
     custom_resources as cr,
@@ -53,6 +54,14 @@ else:
 class CodeStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        
+        # 生成唯一标识符 (基于 account_id 和 region 的 hash)
+        unique_id = hashlib.md5(f"{Aws.ACCOUNT_ID}-{Aws.REGION}".encode()).hexdigest()[:8]
+        self.unique_suffix = unique_id
+        
+        # 缩短 stack name 用于资源命名 (最多20字符)
+        self.short_stack_name = construct_id[:20] if len(construct_id) <= 20 else construct_id[:17] + unique_id[:3]
+        
         config = self.get_config()
         logging_context = config["logging"]
         kms_key = self.create_kms_key()
@@ -174,7 +183,7 @@ class CodeStack(Stack):
         kms_key = kms.Key(
             self,
             "KMSKey",
-            alias=f"alias/{Aws.STACK_NAME}/genai_key",
+            alias=f"alias/{self.short_stack_name}/genai-{self.unique_suffix}",
             enable_key_rotation=True,
             pending_window=Duration.days(7),
             removal_policy=RemovalPolicy.DESTROY,
@@ -201,7 +210,7 @@ class CodeStack(Stack):
         agent_assets_bucket = s3.Bucket(
             self,
             "AgentAssetsSourceBaseBucket",
-            bucket_name=f"{Aws.STACK_NAME}-agent-assets-bucket",
+            bucket_name=f"{self.short_stack_name}-assets-{self.unique_suffix}",
             versioned=True,
             auto_delete_objects=True,
             removal_policy=RemovalPolicy.DESTROY,
@@ -320,7 +329,7 @@ class CodeStack(Stack):
             compatible_runtimes=[self.lambda_runtime],
             compatible_architectures=[compatible_arch],
             description=f"Lambda layer for {layer_name}",
-            layer_version_name=layer_name,
+            layer_version_name=f"{layer_name}-{self.unique_suffix}",
         )
 
         return layer
@@ -344,6 +353,8 @@ class CodeStack(Stack):
         lambda_role = iam.Role(
             self,
             "LambdaRole",
+            # 修正：缩短角色名称 (最多32字符)
+            role_name=f"ActionLambda-{self.unique_suffix}",
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name(
@@ -423,7 +434,7 @@ class CodeStack(Stack):
         opensearchserverless.CfnAccessPolicy(
             self,
             "LambdaDataAccess",
-            name=f"lambda-{Aws.STACK_NAME}",
+            name=f"lambda-{self.short_stack_name}-{self.unique_suffix}",
             type="data",
             policy=json.dumps([
                 {
@@ -449,7 +460,7 @@ class CodeStack(Stack):
         lambda_function = lambda_.Function(
             self,
             "AgentActionLambdaFunction",
-            function_name=f"{Aws.STACK_NAME}-agent-action-lambda-{Aws.ACCOUNT_ID}",
+            function_name=f"{self.short_stack_name}-action-{self.unique_suffix}",
             description="Lambda code for GenAI Chatbot",
             architecture=compatible_arch,
             handler=lambda_.Handler.FROM_IMAGE,
@@ -492,11 +503,14 @@ class CodeStack(Stack):
         return lambda_function
 
     def create_agent_execution_role(self, agent_assets_bucket):
+        # 修正：使用唯一且短的角色名称 (最多32字符)
+        role_name = f"BedrockAgent-{self.unique_suffix}"
+        
         agent_resource_role = iam.Role(
             self,
             "ChatBotBedrockAgentRole",
-            # must be AmazonBedrockExecutionRoleForAgents_string
-            role_name=f"AmazonBedrockExecutionRoleForAgents_{Aws.STACK_NAME}_{Aws.ACCOUNT_ID}",
+            # 修正：角色名称不超过32字符且唯一
+            role_name=role_name,
             assumed_by=iam.ServicePrincipal("bedrock.amazonaws.com"),
         )
 
@@ -571,6 +585,8 @@ class CodeStack(Stack):
         create_index_lambda_execution_role = iam.Role(
             self,
             "CreateIndexExecutionRole",
+            # 修正：缩短角色名称
+            role_name=f"IndexRole-{self.unique_suffix}",
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             description="Role for OpenSearch access",
             managed_policies=[
@@ -583,7 +599,7 @@ class CodeStack(Stack):
         cfn_collection = opensearchserverless.CfnCollection(
             self,
             "ChatBotAgentCollection",
-            name=f"{Aws.STACK_NAME}-oscollect",
+            name=f"{self.short_stack_name}-os-{self.unique_suffix}",
             description="ChatBot Agent Collection",
             type="VECTORSEARCH",
         )
@@ -625,7 +641,7 @@ class CodeStack(Stack):
             "EncryptionPolicy",
             type="AWS::OpenSearchServerless::SecurityPolicy",
             properties={
-                "Name": f"{Aws.STACK_NAME}-encryption-policy",
+                "Name": f"{self.short_stack_name}-enc-{self.unique_suffix}",
                 "Type": "encryption",
                 "Description": "Encryption policy for Bedrock collection.",
                 "Policy": json_dump,
@@ -654,7 +670,7 @@ class CodeStack(Stack):
             "NetworkPolicy",
             type="AWS::OpenSearchServerless::SecurityPolicy",
             properties={
-                "Name": f"{Aws.STACK_NAME}-network-policy",
+                "Name": f"{self.short_stack_name}-net-{self.unique_suffix}",
                 "Type": "network",
                 "Description": "Network policy for Bedrock collection",
                 "Policy": json_dump,
@@ -691,7 +707,7 @@ class CodeStack(Stack):
             "DataPolicy",
             type="AWS::OpenSearchServerless::AccessPolicy",
             properties={
-                "Name": f"{Aws.STACK_NAME}-data-policy",
+                "Name": f"{self.short_stack_name}-data-{self.unique_suffix}",
                 "Type": "data",
                 "Description": "Data policy for Bedrock collection.",
                 "Policy": json_dump,
@@ -705,7 +721,7 @@ class CodeStack(Stack):
         self.create_index_lambda = lambda_.Function(
             self,
             "CreateIndexLambda",
-            function_name=f"{Aws.STACK_NAME}-create-index-lambda",
+            function_name=f"{self.short_stack_name}-index-{self.unique_suffix}",
             runtime=self.lambda_runtime,
             handler="index.lambda_handler",
             code=lambda_.Code.from_asset(
@@ -765,7 +781,7 @@ class CodeStack(Stack):
         lambda_cr,
     ):
 
-        kb_name = f"BedrockKnowledgeBase-{Aws.STACK_NAME}"
+        kb_name = f"KB-{self.short_stack_name}-{self.unique_suffix}"
         text_field = "AMAZON_BEDROCK_TEXT_CHUNK"
         metadata_field = "AMAZON_BEDROCK_METADATA"
         agent_resource_role_arn = agent_resource_role.role_arn
@@ -861,7 +877,7 @@ class CodeStack(Stack):
         cfn_agent = bedrock.CfnAgent(
             self,
             "ChatbotBedrockAgent",
-            agent_name=self.BEDROCK_AGENT_NAME,
+            agent_name=f"{self.BEDROCK_AGENT_NAME}-{self.unique_suffix}",
             # the properties below are optional
             action_groups=[
                 bedrock.CfnAgent.AgentActionGroupProperty(
@@ -952,6 +968,8 @@ class CodeStack(Stack):
         invoke_lambda_role = iam.Role(
             self,
             "InvokeLambdaExecutionRole",
+            # 修正：缩短角色名称
+            role_name=f"InvokeLambda-{self.unique_suffix}",
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             description="Role for Lambda to access Bedrock agents and S3",
             managed_policies=[
@@ -1027,7 +1045,7 @@ class CodeStack(Stack):
         self.invoke_lambda = lambda_.DockerImageFunction(
             self,
             self.STREAMLIT_INVOKE_LAMBDA_FUNCTION_NAME,
-            function_name=f"{Aws.STACK_NAME}-{self.STREAMLIT_INVOKE_LAMBDA_FUNCTION_NAME}-{Aws.ACCOUNT_ID}",
+            function_name=f"{self.short_stack_name}-invoke-{self.unique_suffix}",
             code=lambda_.DockerImageCode.from_image_asset(
                 directory=path.join(os.getcwd(), self.LAMBDAS_SOURCE_FOLDER, "invoke-lambda"),
                 platform=ecr_image_platform
@@ -1056,6 +1074,8 @@ class CodeStack(Stack):
         export_lambda_role = iam.Role(
             self,
             "ExportLambdaExecutionRole",
+            # 修正：缩短角色名称
+            role_name=f"ExportLambda-{self.unique_suffix}",
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             description="Role for Lambda to access S3",
             managed_policies=[
@@ -1093,7 +1113,7 @@ class CodeStack(Stack):
         self.export_lambda = lambda_.Function(
             self,
             self.STREAMLIT_EXPORT_LAMBDA_FUNCTION_NAME,
-            function_name=f"{Aws.STACK_NAME}-{self.STREAMLIT_EXPORT_LAMBDA_FUNCTION_NAME}-{Aws.ACCOUNT_ID}",
+            function_name=f"{self.short_stack_name}-export-{self.unique_suffix}",
             architecture=compatible_arch,
             handler=lambda_.Handler.FROM_IMAGE,
             runtime=lambda_.Runtime.FROM_IMAGE,
@@ -1114,7 +1134,6 @@ class CodeStack(Stack):
         )
 
         return self.export_lambda
-
 
     def create_vanna_data_init_lambda(
             self,
@@ -1142,7 +1161,7 @@ class CodeStack(Stack):
         vanna_data_init_lambda = lambda_.Function(
             self,
             "VannaDataInitLambda",
-            function_name=f"{Aws.STACK_NAME}-vanna-data-init-lambda",
+            function_name=f"{self.short_stack_name}-vanna-{self.unique_suffix}",
             runtime=self.lambda_runtime,
             handler="index.lambda_handler",
             code=lambda_.Code.from_asset(
@@ -1186,7 +1205,6 @@ class CodeStack(Stack):
         
         return vanna_data_cr
 
-
     def create_update_lambda(
         self,
         knowledge_base,
@@ -1199,6 +1217,8 @@ class CodeStack(Stack):
         lambda_role = iam.Role(
             self,
             "LambdaRole_update_resources",
+            # 修正：缩短角色名称
+            role_name=f"UpdateLambda-{self.unique_suffix}",
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name(
@@ -1249,7 +1269,7 @@ class CodeStack(Stack):
         lambda_function_update = lambda_.Function(
             self,
             "LambdaFunction_update_resources",
-            function_name=f"{Aws.STACK_NAME}-update-lambda",
+            function_name=f"{self.short_stack_name}-update-{self.unique_suffix}",
             description="Lambda code to trigger crawler, create bedrock agent alias, knowledgebase data sync",
             architecture=compatible_arch,
             handler="lambda_handler.lambda_handler",
@@ -1294,7 +1314,7 @@ class CodeStack(Stack):
     ):
         # 創建 VPC
         vpc = ec2.Vpc(
-            self, "ChatBotDemoVPC", max_azs=2, vpc_name=f"{Aws.STACK_NAME}-vpc"
+            self, "ChatBotDemoVPC", max_azs=2, vpc_name=f"{self.short_stack_name}-vpc"
         )
         NagSuppressions.add_resource_suppressions(
             vpc,
@@ -1307,14 +1327,15 @@ class CodeStack(Stack):
         cluster = ecs.Cluster(
             self,
             "ChatBotDemoCluster",
-            cluster_name=f"{Aws.STACK_NAME}-ecs-cluster",
+            cluster_name=f"{self.short_stack_name}-ecs-cluster",
             container_insights=True,
             vpc=vpc,
         )
 
         # 從本地建構 image 並推向 ECR
         image = ecs.ContainerImage.from_asset(
-            path.join(os.getcwd(), "code", "streamlit-app")
+            path.join(os.getcwd(), "code", "streamlit-app"),
+            platform=Platform.LINUX_AMD64,
         )
 
         # 優化後的 Fargate service 配置
@@ -1366,7 +1387,7 @@ class CodeStack(Stack):
                 ),
             ),
             
-            service_name=f"{Aws.STACK_NAME}-chatbot-service",
+            service_name=f"{self.short_stack_name}-chatbot-service",
             
             # 記憶體優化：保持 4096 MiB
             # 理由：需要暫存用戶 session 和處理大型 HTML 響應
@@ -1378,7 +1399,8 @@ class CodeStack(Stack):
             platform_version=ecs.FargatePlatformVersion.LATEST,
             runtime_platform=ecs.RuntimePlatform(
                 operating_system_family=ecs.OperatingSystemFamily.LINUX,
-                cpu_architecture=compatible_ecs_arch
+                #cpu_architecture=compatible_ecs_arch
+                cpu_architecture=ecs.CpuArchitecture.X86_64
             ),
             
             # 健康檢查優化
@@ -1395,15 +1417,15 @@ class CodeStack(Stack):
         # CPU-based scaling (主要指標)
         scaling.scale_on_cpu_utilization(
             "CpuScaling",
-            target_utilization_percent=50,  # 60% CPU 觸發擴展
-            scale_in_cooldown=Duration.minutes(10),   # 5分鐘冷卻 (避免頻繁縮減)
-            scale_out_cooldown=Duration.minutes(1),  # 2分鐘冷卻 (快速響應)
+            target_utilization_percent=50,  # 50% CPU 觸發擴展
+            scale_in_cooldown=Duration.minutes(10),   # 10分鐘冷卻 (避免頻繁縮減)
+            scale_out_cooldown=Duration.minutes(1),  # 1分鐘冷卻 (快速響應)
         )
         
         # Memory-based scaling (輔助指標)
         scaling.scale_on_memory_utilization(
             "MemoryScaling", 
-            target_utilization_percent=60,  # 70% 記憶體觸發擴展
+            target_utilization_percent=60,  # 60% 記憶體觸發擴展
             scale_in_cooldown=Duration.minutes(10),
             scale_out_cooldown=Duration.minutes(1),
         )
@@ -1411,7 +1433,7 @@ class CodeStack(Stack):
         # Request-based scaling (用戶體驗導向)
         scaling.scale_on_request_count(
             "RequestCountScaling",
-            requests_per_target=50,  # 每個實例最多30個併發請求
+            requests_per_target=50,  # 每個實例最多50個併發請求
             target_group=fargate_service.target_group,
             scale_in_cooldown=Duration.minutes(10),
             scale_out_cooldown=Duration.minutes(1),  # 1分鐘快速響應
