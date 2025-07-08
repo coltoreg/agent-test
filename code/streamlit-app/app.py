@@ -627,7 +627,7 @@ def show_form():
 
 # =====================   Enhanced Chat Rendering   =====================
 def _render_message(msg: dict) -> None:
-    """增強版消息渲染，支持圖表和動態高度調整"""
+    """消息渲染，支持圖表"""
     role, content = msg["role"], msg["content"]
 
     if role == "assistant":
@@ -635,25 +635,9 @@ def _render_message(msg: dict) -> None:
             '<div class="market-analysis-report">' in content
             or '<div class="report-source">' in content
         ):
-            # 檢測是否包含圖表來調整高度
-            has_charts = 'chart-container' in content or 'plotly' in content.lower()
-            chart_count = content.count('chart-container')
-            
-            # 動態計算高度
-            base_height = 700
-            if has_charts:
-                # 每個圖表增加400px高度
-                base_height += chart_count * 400
-                
-            # 確保最小和最大高度
-            final_height = max(800, min(base_height, 2000))
-            
-            logger.info(f"渲染HTML，檢測到 {chart_count} 個圖表，設定高度為 {final_height}px")
-            
             try:
                 components.html(
                     content, 
-                    height=final_height, 
                     scrolling=True
                 )
                 return

@@ -92,7 +92,15 @@ def build_prompt(user_input: str, topic: str, company_info: Dict[str, str]) -> s
       請以『市場概況與趨勢』的角度…」
     """
     base = "，".join(f"{k}：{v}" for k, v in company_info.items() if v.strip())
-    return f"請用searchinternet上網搜尋、querygluetable抓資料及利用knwoledge base抓資料。{base}目標標題: {topic}。對此標題進行專業分析：{user_input}"
+    return f"""請按照以下步驟進行分析：
+    1. 使用 searchinternet 工具搜尋相關的最新市場資訊和趨勢
+    2. 使用 querygluetable 工具查詢相關數據資料
+    3. 使用 knowledge_base 工具獲取專業知識和背景資訊
+    公司基本資料：{base}
+    分析主題：{topic}
+    具體問題：{user_input}
+    請基於以上三個工具獲得的資訊，對「{topic}」進行全面且專業的分析。
+    """
 
 
 def invoke_agent(
@@ -108,6 +116,7 @@ def invoke_agent(
         raise RuntimeError("❌ 找不到可用的 Agent Alias")
 
     prompt = build_prompt(user_input, topic, company_info)
+    logger.info(f"prompt:{prompt}")
     return agent_runtime_client.invoke_agent(
         agentId=AGENT_ID,
         agentAliasId=alias_id,

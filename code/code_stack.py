@@ -56,7 +56,8 @@ class CodeStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
         
         # 生成唯一标识符 (基于 account_id 和 region 的 hash)
-        unique_id = hashlib.md5(f"{Aws.ACCOUNT_ID}-{Aws.REGION}".encode()).hexdigest()[:8]
+        #unique_id = hashlib.md5(f"{Aws.ACCOUNT_ID}-{Aws.REGION}".encode()).hexdigest()[:8]
+        unique_id = '65319500' # 這是為了避免在本地開發時出現錯誤
         self.unique_suffix = unique_id
         
         # 缩短 stack name 用于资源命名 (最多20字符)

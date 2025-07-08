@@ -28,7 +28,7 @@ from services.connections import Connections
 logger = setup_logger(__name__)
 
 # 設定超時時間 (秒)
-CHART_GENERATION_TIMEOUT = 60
+CHART_GENERATION_TIMEOUT = 120
 
 class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
     """
@@ -64,7 +64,7 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
             config={
                 "modelId": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
                 "temperature": float(0.0),
-                "max_tokens": int(5000),
+                "max_tokens": int(50000),
             },
         )
         
@@ -176,7 +176,7 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                 logger.error("schema 資訊為空")
                 return False
             
-            logger.info(f"成功獲取 schema 資訊: {df_information_schema}")
+            logger.info(f"成功獲取 schema 資訊")
             
             # 獲取訓練計劃
             plan, error = self.safe_execute(self.get_training_plan_generic, df_information_schema)
@@ -199,8 +199,18 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
             (self.train, {"plan": plan}),
             (self.train, {
                 "documentation": """
-                You have to give an AWS Athena SQL for each question.Table name is  "default"."invoice_data_invdate".Each query needs to specify invDate. If invDate is specified, the default is the last 14 days.This is an invoice table storing each customer's invoice data. Below are the columns and their descriptions. 
-                Columns: 
+                CRITICAL INSTRUCTIONS - YOU MUST FOLLOW THESE RULES:
+                1. ALWAYS RETURN ONLY VALID AWS ATHENA SQL QUERIES
+                2. NEVER return explanatory text, disclaimers, or any non-SQL content
+                3. If you cannot generate a SQL query, return: SELECT 'No valid query available' as message
+                4. Queries must not reference columns that do not exist in this schema.
+                5. Always query the "default"."invoice_data_invdate" table
+                6. ALL QUERIES MUST INCLUDE invDate FILTERING.;
+
+                DATABASE SCHEMA:
+                Table: "default"."invoice_data_invdate"
+
+                COLUMNS AVAILABLE:
                 inv_num (invoice number),
                 aaid (Android device id),
                 idfa (iOS device id),
@@ -216,6 +226,14 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                 birthday (YYYY-MM-DD, inferred user birthday),
                 gender (inferred user gender),
                 amount (integer, total invoice amount)
+
+                
+                <error_check>
+                If there's an error, I'll explain:
+                - What went wrong
+                - Why it happened
+                - How to fix it
+                </error_check>
                 """,
                 "plan": plan
             })
@@ -363,14 +381,17 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
         ) -> Dict[str, Any]:
         """生成單一圖表"""
         try:
-            logger.info(f"正在生成圖表 {index}: {question[:300]}")
+            logger.info(f"正在生成圖表 {index}")
+            logger.info(f"問題: {question.strip()}")
             
             # 使用 Vanna 生成結果
             result, error = self.safe_execute(
                 self.ask,
                 question=question.strip(),
-                allow_llm_to_see_data=True
+                allow_llm_to_see_data=True,
+                print_results=True,
             )
+            #logger.info(f"Vanna ask 結果: {result}")
             
             if error:
                 logger.error(f"Vanna ask 失敗: {error}")
@@ -596,6 +617,14 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                     6.結果適合用於製作圓餅圖
                                 3. 銷售額是 unit_price * quantity
                                 請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
+                                請優化產生的 Plotly 圖表，要求如下：
+                                1. 使用乾淨現代的風格（白色背景、清晰字體、可讀性高的標籤）。
+                                2. 調整版面配置（包含圖表標題、座標軸標籤、邊距等）。
+                                3. 增加互動性功能，例如提示框（tooltip）、縮放、拖曳移動。
+                                4. 請使用 `plotly.offline.plot()` 或 `fig.to_html()` 將圖表轉換為獨立的 HTML 字串，可嵌入網頁使用。
+                                5. 請只回傳 HTML 字串，不要回傳圖表物件。
+                                6. 所有必要的 JS/CSS 請內嵌，確保離線也可顯示。
+                                目的是讓圖表在網站上呈現時更美觀且專業。
                                 """]
                             },
                             {
@@ -619,6 +648,15 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                     6.結果適合用於製作圓餅圖
                                 3. 銷售額是 unit_price * quantity
                                 請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
+                                請優化產生的 Plotly 圖表，要求如下：
+                                1. 使用乾淨現代的風格（白色背景、清晰字體、可讀性高的標籤）。
+                                2. 調整版面配置（包含圖表標題、座標軸標籤、邊距等）。
+                                3. 增加互動性功能，例如提示框（tooltip）、縮放、拖曳移動。
+                                4. 請使用 `plotly.offline.plot()` 或 `fig.to_html()` 將圖表轉換為獨立的 HTML 字串，可嵌入網頁使用。
+                                5. 請只回傳 HTML 字串，不要回傳圖表物件。
+                                6. 所有必要的 JS/CSS 請內嵌，確保離線也可顯示。
+                                目的是讓圖表在網站上呈現時更美觀且專業。
+
                                 """]
                             },
                             {
@@ -638,6 +676,15 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                     6.結果適合用於製作圓餅圖
                                 3. 銷售額是 unit_price * quantity
                                 請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
+                                請優化產生的 Plotly 圖表，要求如下：
+                                1. 使用乾淨現代的風格（白色背景、清晰字體、可讀性高的標籤）。
+                                2. 調整版面配置（包含圖表標題、座標軸標籤、邊距等）。
+                                3. 增加互動性功能，例如提示框（tooltip）、縮放、拖曳移動。
+                                4. 請使用 `plotly.offline.plot()` 或 `fig.to_html()` 將圖表轉換為獨立的 HTML 字串，可嵌入網頁使用。
+                                5. 請只回傳 HTML 字串，不要回傳圖表物件。
+                                6. 所有必要的 JS/CSS 請內嵌，確保離線也可顯示。
+                                目的是讓圖表在網站上呈現時更美觀且專業。
+
                                 """]
                             },
                             {
