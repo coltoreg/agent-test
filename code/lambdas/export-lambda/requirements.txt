@@ -7,4 +7,3 @@ beautifulsoup4==4.13.4
 pillow==11.2.1
 plotly
 numpy==2.2.0
-matplotlib

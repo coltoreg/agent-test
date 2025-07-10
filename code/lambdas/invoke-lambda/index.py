@@ -24,6 +24,7 @@ import random
 import uuid
 import base64
 import concurrent.futures
+from botocore.exceptions import EventStreamError
 
 from connections import Connections
 from utils import (
@@ -51,6 +52,12 @@ agent_client = Connections.agent_client
 agent_runtime_client = Connections.agent_runtime_client
 s3_resource = Connections.s3_resource
 s3_client_fbmapping = Connections.s3_client_fbmapping
+
+_HEADING_RE = re.compile(r'^\s*<h[23][^>]*>.*?</h[23]>\s*', flags=re.I | re.S)
+
+def _strip_leading_heading(html: str) -> str:
+    """如果字串最前面就是 <h2>/<h3>，連帶前後空白一起移除一次"""
+    return _HEADING_RE.sub('', html, count=1)
 
 # ---------------------------------------------------------------------
 # Agent helpers
@@ -92,15 +99,7 @@ def build_prompt(user_input: str, topic: str, company_info: Dict[str, str]) -> s
       請以『市場概況與趨勢』的角度…」
     """
     base = "，".join(f"{k}：{v}" for k, v in company_info.items() if v.strip())
-    return f"""請按照以下步驟進行分析：
-    1. 使用 searchinternet 工具搜尋相關的最新市場資訊和趨勢
-    2. 使用 querygluetable 工具查詢相關數據資料
-    3. 使用 knowledge_base 工具獲取專業知識和背景資訊
-    公司基本資料：{base}
-    分析主題：{topic}
-    具體問題：{user_input}
-    請基於以上三個工具獲得的資訊，對「{topic}」進行全面且專業的分析。
-    """
+    return f"請用searchinternet上網搜尋、querygluetable抓資料及利用knwoledge base抓資料。{base}目標標題: {topic}。對此標題進行專業分析：{user_input}"
 
 
 def invoke_agent(
@@ -116,7 +115,7 @@ def invoke_agent(
         raise RuntimeError("❌ 找不到可用的 Agent Alias")
 
     prompt = build_prompt(user_input, topic, company_info)
-    logger.info(f"prompt:{prompt}")
+    logger.info("agent prompt: %s", prompt)
     return agent_runtime_client.invoke_agent(
         agentId=AGENT_ID,
         agentAliasId=alias_id,
@@ -176,18 +175,16 @@ def get_agent_response(
         logger.warning("extract Athena refs error: %s", e)
         txt2figure_results = []
 
-    # 僅在指定主題時，把「成功取得圖檔」的標題也列入來源
-    if topic == "市場概況與趨勢":
-        chart_sources = [
-            c["title_text"]
-            for c in txt2figure_results
-            if c.get("img_html") and (
-                (isinstance(c["img_html"], dict) and c["img_html"].get("bytes"))
-                or not isinstance(c["img_html"], dict)  # str / S3 URL 視為成功
-            )
-        ]
-        sources.extend(chart_sources)
-        logger.info("added %d chart titles into sources", len(chart_sources))
+    chart_sources = [
+        c["title_text"]
+        for c in txt2figure_results
+        if c.get("img_html") and (
+            (isinstance(c["img_html"], dict) and c["img_html"].get("bytes"))
+            or not isinstance(c["img_html"], dict)  # str / S3 URL 視為成功
+        )
+    ]
+    sources.extend(chart_sources)
+    logger.info("added %d chart titles into sources", len(chart_sources))
 
     return full_text, sources, txt2figure_results
 
@@ -313,42 +310,47 @@ def _fetch_s3_object_as_bytes(uri: str) -> bytes:
 
 def _process_vanna_result(vanna_result: List[dict]) -> List[dict]:
     """
-    遞迴掃描 vanna_result；遇到 img_html=S3 URI 就下載，
-    並轉成 {"bytes": ..., "b64": ...}。
+    遞迴掃描 vanna_result；遇到 img_html=HTML 檔才下載並內嵌，
+    PNG/JPG 仍保留原 URL，交由前端 <img src="..."> 載入。
     """
 
     def _transform(node: Any) -> Any:
-        # Dict ───────────────────────────────────────────────────────────
+        # ---------------- Dict ----------------
         if isinstance(node, dict):
             new_node: Dict[str, Any] = {}
             for k, v in node.items():
+                # 只處理 img_html
                 if k == "img_html" and isinstance(v, str) and v:
-                    logger.info("Fetching S3 object for key '%s': %s", k, v)
-                    try:
-                        raw = _fetch_s3_object_as_bytes(v)
-                        new_node[k] = {
-                            "bytes": raw,
-                            "b64": base64.b64encode(raw).decode()
-                        }
-                        logger.debug("Successfully converted '%s' (%d bytes)", k, len(raw))
-                    except Exception as exc:
-                        # 不 raise，讓後續流程不中斷
-                        logger.warning("Failed to fetch S3 object: %s", exc)
-                        new_node[k] = None
+                    # ① 只針對 .html 檔做下載→ 內嵌
+                    if v.lower().endswith(".html"):
+                        try:
+                            raw = _fetch_s3_object_as_bytes(v)
+                            new_node[k] = {
+                                "bytes": raw,
+                                "b64": base64.b64encode(raw).decode()
+                            }
+                            logger.debug("HTML 轉內嵌成功 (%d bytes)", len(raw))
+                        except Exception as exc:
+                            logger.warning("下載 HTML 失敗: %s", exc)
+                            new_node[k] = v   # 回退為原 URL
+                    else:
+                        # ② PNG/JPG → 保留 URL，前端用 <img src='...'>
+                        new_node[k] = v
                 else:
                     new_node[k] = _transform(v)
             return new_node
 
-        # List ────────────────────────────────────────────────────────────
+        # ---------------- List ----------------
         if isinstance(node, list):
             return [_transform(item) for item in node]
 
-        # Scalar ──────────────────────────────────────────────────────────
+        # -------------- 其他型別 --------------
         return node
 
     processed = _transform(vanna_result)
-    logger.info("Finished converting vanna_result (total items: %d)", len(vanna_result))
+    logger.info("✔︎ vanna_result 轉換完成 (items=%d)", len(vanna_result))
     return processed
+
 
 def _add_title_suffix(result: List[dict], suffix: str = "(發票數據)") -> List[dict]:
     """
@@ -527,7 +529,7 @@ def _build_path_to_key(topic_cfg: Dict[str, Any]) -> Dict[str, str]:
     """
     把 output_format 的結構轉成 {完整路徑: section_key}
     例：
-      subtopics.0           -> _00_00_產業規模與成長_header
+      subtopics.0 -> _00_00_產業規模與成長_header
       subtopics.0.subsubtopics.2 -> _00_03_年度銷售變化
     """
     mapping = {}
@@ -585,6 +587,7 @@ def build_output_format(
     # 生成標題 → section_key 的映射，後續插圖用
     title_to_key = {k.split("_", 3)[3]: k for k in result}
     path_to_key = _build_path_to_key(topic_cfg)
+    logger.debug(f"[DEBUG] path_to_key keys = {list(path_to_key.keys())[:10]} ...")
 
     # ------------------------------------------------------------------
     # 插入 Vanna 圖表
@@ -666,13 +669,14 @@ def _generate_sections_html(
             key_body   = f"_{s_idx:02d}_01_{s_title}_content"
             if key_header not in sections:
                 sections[key_header] = f"<h2>{get_heading_prefix(2, s_idx)} {s_title}</h2>"
-            sections[key_body] = html
+            sections[key_body] = _strip_leading_heading(html)  # 避免重複出現 <h2> 標題
         else:
             parent_header = f"_{s_idx:02d}_00_{s_title}_header"
             if parent_header not in sections:
                 sections[parent_header] = f"<h2>{get_heading_prefix(2, s_idx)} {s_title}</h2>"
             key = f"_{s_idx:02d}_{ss_idx+1:02d}_{target_title}"
-            if not html.startswith("<h3"):
+            html = _strip_leading_heading(html)  # 避免重複出現 <h3> 標題
+            if not html.lstrip().startswith("<h3"):
                 html = f"<h3>{get_heading_prefix(3, ss_idx)} {target_title}</h3>" + html
             sections[key] = html
 
@@ -712,6 +716,13 @@ def _insert_chart(chart, result, title_to_key, path_to_key, charts, word_charts)
 
     # --- 決定放哪 ---
     target_key = _find_target_key(chart, title_to_key, path_to_key, result)
+
+    # 若目前定位在「_header」，而同章節有「_content」，就改放 _content
+    if target_key and target_key.endswith("_header"):
+        content_key = target_key.replace("_header", "_content")
+        if content_key in result:
+            target_key = content_key
+            
     if not target_key:
         logger.error("no place for chart: %s", title_text)
         return
@@ -739,45 +750,90 @@ def _insert_chart(chart, result, title_to_key, path_to_key, charts, word_charts)
 # ==========================================================================
 # build_output_format 更小的工具函式（只做單一簡單任務）
 # ==========================================================================
+# ------------------------------------------------------------------
+# build_output_format 更小的工具函式（只做單一簡單任務）
+# ------------------------------------------------------------------
 def _prepare_bytes_b64(img_html):
-    """dict/bytes/URL 統一回 (bytes, b64_str | None)"""
+    """dict / bytes / S3-URL 統一回傳 (bytes, b64_str | None)"""
+
+    # 內嵌 dict ─ 已經有 bytes / b64
     if isinstance(img_html, dict):
         return img_html.get("bytes"), img_html.get("b64")
+
+    # 直接傳入位元組
     if isinstance(img_html, (bytes, bytearray)):
         b = bytes(img_html)
         return b, base64.b64encode(b).decode()
-    return None, None  # URL
+
+    # S3 URL → 下載 PNG/JPG → base64
+    if (
+        isinstance(img_html, str)
+        and img_html.lower().endswith((".png", ".jpg", ".jpeg"))
+        and (img_html.startswith("s3://") or ".s3." in img_html.lower())
+    ):
+        try:
+            raw = _fetch_s3_object_as_bytes(img_html)
+            return raw, base64.b64encode(raw).decode()
+        except Exception as exc:
+            # 下載失敗就回傳 (None, None)，前端仍用外鏈，不影響流程
+            logger.warning("⚠️ 下載 S3 圖片失敗，改用外鏈: %s", exc)
+            return None, None
+
+    # 其他情況（外部 URL 等）保持原狀，由前端 <img src="url"> 嘗試載入
+    return None, None
+
 
 def _find_target_key(chart, title_to_key, path_to_key, result):
     """依五層優先序找 section key"""
 
     # 1. 直接比對 target_path
-    tp = chart.get("target_path", "")
-    if tp and tp in path_to_key:
-        return path_to_key[tp]
+    tp = chart.get("target_path", "").strip().lstrip(".")
+    logger.debug("[MATCH] tp=%s", tp or "(EMPTY)")
+
+    if tp:                                             
+        logger.info("[DEBUG] target_path = %s", tp)    
+        logger.info("[DEBUG] path_to_key keys = %s",
+                    list(path_to_key.keys())) 
+        # 精確命中
+        if tp and tp in path_to_key:
+            logger.debug(f"[DEBUG] EXACT match {tp} -> {path_to_key[tp]}")
+            return path_to_key[tp]
+        # 寬鬆：圖的 path 比對到更深層也算
+        for p, k in path_to_key.items():
+            if tp.startswith(p):
+                logger.debug("[MATCH] EXACT %s → %s", tp, k)
+                return k
 
     # 2 context
     ctx = chart.get("context", "")
     for t, k in title_to_key.items():
         if t in ctx:
+            logger.debug("[MATCH] EXACT %s → %s", tp, k)
             return k
 
     # 3 question
     q = chart.get("question", "")
     for t, k in title_to_key.items():
         if t in q:
+            logger.debug("[MATCH] EXACT %s → %s", tp, k)
             return k
 
     # 4 title_text
     tt = chart.get("title_text", "").replace("(發票數據)", "").strip()
     for t, k in title_to_key.items():
         if tt in t or t in tt:
+            logger.debug("[MATCH] EXACT %s → %s", tp, k)
             return k
 
-    # 5 fallback：第一個非 header 的 key
     for k in sorted(result):
+        # 略過報告主標題，避免全部圖掛在最頂
+        if k == "_000_main_title":
+            continue
         if not k.endswith("_header"):
+            logger.debug("[MATCH] EXACT %s → %s", tp, k)
             return k
+    
+    logger.warning(f"[WARN] no match for {tp}")
     return None
 
 # ------------------------------------------------------------------
@@ -817,7 +873,9 @@ def call_model_unified(task_info, raw_analysis, task_id=""):
         system_prompt = f"""You are a market insight report integration assistant specializing in data structuring and visualization. 
 Your task is to transform raw analysis text into a structured JSON containing HTML-formatted report sections.
 
-IMPORTANT: Your output MUST be a valid JSON object with the specified subtopic as key and HTML content as value.
+IMPORTANT: Your output MUST be a valid JSON object **with exactly one key**.
+That single key MUST be "{subtopic_title}" (no spaces, no variants).
+
 
 STRICT CONTENT RULES:
 - DO NOT fabricate or assume information that is not explicitly present in the provided raw analysis, unless handling a missing subtopic as described below.
@@ -829,9 +887,8 @@ PRECISE INSTRUCTIONS:
 0. Your response MUST begin with a ```json code block, and contain ONLY the JSON object inside. Do not include any explanation, greeting, or comment before or after the JSON.
 1. YOUR RESPONSE MUST BE A VALID JSON OBJECT that matches the example format exactly.
 2. For the subtopic that has relevant data:
-- Create a key in the JSON with the exact subtopic name.
-- The value must be properly formatted HTML that includes:
-    - Section heading using `<h2>{prefix} {subtopic_title}</h2>`
+The value must be properly formatted HTML that includes:
+    - DO NOT contain <h2>/<h3>, Return only paragraphs, lists, and bold/italic tags
     - Content paragraphs using `<p>...</p>` 
     - Lists using `<ul><li>...</li></ul>` for bullet points
     - Important data highlighted with `<strong>` or `<em>` tags
@@ -857,7 +914,9 @@ REQUIRED OUTPUT FORMAT:
         system_prompt = f"""You are a market insight report integration assistant specializing in data structuring and visualization. 
 Your task is to transform raw analysis text into a structured JSON containing HTML-formatted report sections.
 
-IMPORTANT: Your output MUST be a valid JSON object with the specified subtopics as keys and HTML content as values.
+IMPORTANT: Your output MUST be a valid JSON object **with exactly one key**.
+That single key MUST be "{subsubtopic_title}" (no spaces, no variants).
+
 
 STRICT CONTENT RULES:
 - DO NOT fabricate or assume information that is not explicitly present in the provided raw analysis, unless handling a missing subtopic as described below.
@@ -871,7 +930,7 @@ PRECISE INSTRUCTIONS:
 2. For each subtopic that has relevant data:
 - Create a key in the JSON with the exact subtopic name.
 - The value must be properly formatted HTML that includes:
-    - Section heading using `<h3>{prefix} {subsubtopic_title}</h3>`
+    - DO NOT contain <h2> or <h3>
     - Content paragraphs using `<p>...</p>` 
     - Lists using `<ul><li>...</li></ul>` for bullet points
     - Important data highlighted with `<strong>` or `<em>` tags
@@ -905,7 +964,25 @@ REQUIRED OUTPUT FORMAT:
         parsed = parse_json_from_text(raw_text)
         html_piece = parsed.get(target_title, "")
         
+        html_piece = parsed.get(target_title, "")
+
+        # 沒直接命中就嘗試 fuzzy，比對含／被含關係
         if not html_piece.strip():
+            for k, v in parsed.items():
+                if target_title in k or k in target_title:
+                    logger.warning(
+                        f"⚠️ Key mismatch: target='{target_title}' but model returned key='{k}'"
+                    )
+                    html_piece = v
+                    break
+
+        # 仍然沒有 → 先把可用資訊寫進 log 再 raise
+        if not html_piece.strip():
+            logger.error(
+                f"⚠️ 解析失敗 – target_title='{target_title}' ; "
+                f"模型回傳 keys={list(parsed.keys())} ; "
+                f"raw_text(前300)={raw_text[:300].replace(chr(10), ' ')}"
+            )
             raise Exception("解析後HTML內容為空")
         
         elapsed = time.time() - start_time
@@ -934,7 +1011,9 @@ REQUIRED OUTPUT FORMAT:
 
 def get_response_invoke(system_prompt: str, raw_analysis: str, subtopic_prompt: str, task_id: str = "") -> str:
     # 將 subtopic_prompt 加入 user input
-    user_content = f"分析任務：{subtopic_prompt}\n\nAI Agent-Extracted Market Insights：\n{raw_analysis}"
+    user_content = f"{subtopic_prompt}\n\nAI Agent-Extracted Market Insights：\n{raw_analysis}"
+    logger.info(f"開始處理任務 {task_id}，使用模型 {Connections.output_format_fm}. 完整prompt: {user_content}")
+
     messages = [{"role": "user", "content": user_content}]
      
     body = json.dumps({
@@ -955,8 +1034,9 @@ def get_response_invoke(system_prompt: str, raw_analysis: str, subtopic_prompt: 
                 modelId=Connections.output_format_fm,
             )
             result = resp["body"].read().decode("utf-8")
+            logger.info(f"任務 {task_id} 第 {attempt+1} 次嘗試返回內容: {result}")
             
-            # 新增：驗證結果是否包含有效內容
+            # 驗證結果是否包含有效內容
             if result.strip() and len(result.strip()) > 50:  # 基本內容檢查
                 return result
             else:
@@ -1115,7 +1195,16 @@ def lambda_handler(event: Dict[str, Any], context):
     try:
         # 1. Agent
         logger.info("🤖 調用 Bedrock Agent...")
-        agent_resp = invoke_agent(query, session_id, topic, company_info)
+        try:
+            agent_resp = invoke_agent(query, session_id, topic, company_info)
+        except EventStreamError as e:
+            if "Input is too long" in str(e):
+                logger.error("Agent input too long; returning graceful error.")
+                return {
+                    "answer": "⚠️ Query 太大，請嘗試縮小一次分析的範圍或關閉知識庫檢索後再試。",
+                    "source": ""
+                }
+            raise
         
         # 傳遞 topic 參數給 get_agent_response
         answer_raw, refs, txt2figure_results = get_agent_response(agent_resp, topic)

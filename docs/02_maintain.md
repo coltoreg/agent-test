@@ -16,7 +16,7 @@
 
 - `scripts/`: 自動化佈署用。
 
-- `stacks/`: 包含[前後端及網路的 IaC](./../stacks/) 及方便重複佈署的[資源資訊](./../stacks/resources/)，實現資源分離管理及快速佈署。
+- `stacks/`: 包含[前後端及網路的 IaC](./../stacks/) (方便重複佈署的[資源資訊](./../stacks/resources/)，實現資源分離管理及快速佈署)。
 
 - `app.py`: 實作 [stacks](./../stacks/) 中 IaC，完成佈署。
 

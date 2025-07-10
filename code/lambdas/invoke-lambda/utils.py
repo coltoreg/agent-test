@@ -1,161 +1,3 @@
-# output_format = {
-#   "市場概況與趨勢": {
-#     "title": "市場概況與趨勢",
-#     "subtopics": [
-#       {
-#         "title": "產業規模與成長",
-#         "subsubtopics": [
-#           "台灣市場規模與成長",
-#           "產品類型演進",
-#           "年度銷售變化",
-#           "驅動因素與未來展望"
-#         ]
-#       },
-#       {
-#         "title": "主導品牌分析",
-#         "subsubtopics": [
-#           "主導品牌銷售概況",
-#           "價格帶分析",
-#           "平價帶市場概況",
-#           "高價帶市場概況",
-#           "價格帶結構與策略定位",
-#           "價格帶市佔變化趨勢"
-#         ]
-#       },
-#       # {
-#       #   "title": "消費者痛點與聲量",
-#       #   "subsubtopics": [
-#       #     "痛點分析",
-#       #     "正面熱點事件",
-#       #     "負面熱點事件",
-#       #     "聲量與情緒趨勢",
-#       #     "痛點轉化機會"
-#       #   ]
-#       # },
-#       # {
-#       #   "title": "未來政策與永續趨勢",
-#       #   "subsubtopics": [
-#       #     "國際政策動向",
-#       #     "台灣政策動向",
-#       #     "ESG 與永續議題"
-#       #   ]
-#       # },
-#       # {
-#       #   "title": "市場概況與趨勢總結",
-#       #   "subsubtopics": [
-#       #       "市場概況總結",
-#       #       "Why 為何是這些變化重要",
-#       #       "How 品牌該如何應對市場變化"
-#       #   ]
-#       # }
-#     ]
-#   },
-#   "品牌定位與形象": {
-#     "title": "品牌定位與形象",
-#     "subtopics": [
-#       {
-#         "title": "品牌價格與功能定位",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "品牌形象",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "獨特銷售主張（USP）",
-#         "subsubtopics": []
-#       }
-#     ]
-#   },
-#   "產品分析": {
-#     "title": "產品分析",
-#     "subtopics": [
-#       {
-#         "title": "熱銷產品銷量",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "主打銷售通路",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "目標族群與使用情境",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "產品獨特銷售主張",
-#         "subsubtopics": []
-#       }
-#     ]
-#   },
-#   "消費者行為與洞察": {
-#     "title": "消費者行為與洞察",
-#     "subtopics": [
-#       {
-#         "title": "顧客輪廓",
-#         "subsubtopics": [
-#           "人口屬性",
-#           "生活型態",
-#           "消費力與行為"
-#         ]
-#       },
-#       {
-#         "title": "購買動機",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "廣告投放策略",
-#         "subsubtopics": [
-#           "線上投放策略",
-#           "線下場域策略"
-#         ]
-#       },
-#       {
-#         "title": "Persona",
-#         "subsubtopics": []
-#       }
-#     ]
-#   },
-#   "競品分析": {
-#     "title": "競品分析",
-#     "subtopics": [
-#       {
-#         "title": "功能對比",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "通路對比",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "受眾與使用情境差異",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "競品獨特銷售主張",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "產品優劣點",
-#         "subsubtopics": []
-#       }
-#     ]
-#   },
-#   "結論與建議": {
-#     "title": "結論與建議",
-#     "subtopics": [
-#       {
-#         "title": "產品賣點",
-#         "subsubtopics": []
-#       },
-#       {
-#         "title": "行銷策略",
-#         "subsubtopics": []
-#       }
-#     ]
-#   }
-# }
-
 def output_format_pt(input_company, input_brand, input_product, input_product_category):
 
     output_format_pt = {
@@ -206,90 +48,90 @@ def output_format_pt(input_company, input_brand, input_product, input_product_ca
     - This is not marketing copy. Maintain a factual, analytical, and business-oriented tone.  
     - Ensure all output is usable in Taiwan-based strategy documents for PMs, brand teams, and analysts.""".strip()
                         },
-                        {
-                            "title": "產品類型演進",
-                            "prompt": f"""You are a senior industry analyst writing internal business reports for brand and product strategy in Taiwan.  
-Please generate a structured section titled「產品類型演進」, describing how the product types within the relevant category have evolved in Taiwan in recent years.  
----  
-Input Parameters:  
-- Company Name: {input_company}
-- Brand Name: {input_brand}  
-- Product Name: {input_product}  
----  
-Instructions:  
-- Output must be in Traditional Chinese, using business writing tailored to Taiwanese stakeholders  
-- Total output length should be around 700–900 characters（不含表格）  
-- Content should focus on:  
-  1. 台灣市場中，該類產品的類型變化與設計演進（例如：質地、功能、使用情境等）  
-  2. 描述目前主要的幾種類型、其特色、使用族群與場景  
-  3. 呈現品牌競爭如何由「單一指標」轉向「多功能整合」與「感官體驗」  
-  4. 可舉出具代表性的競爭品牌或產品設計方向（不限於本品牌）  
-- Do not explain pricing, market size, or consumer psychology—those will be addressed in other sections  
----  
-Output Formatting Requirements:  
-- 必須包含一個表格，欄位如下：  
-  - 類型（如：傳統類型、妝前防曬、氣墊型、防曬噴霧等）  
-  - 功能特色  
-  - 主要使用場景／對象  
-  - 市場趨勢簡述（例如：穩定、快速成長、趨緩等）  
-- 表格前或後可補充 2–3 段精簡段落，說明類型演進脈絡與競爭關鍵變化（以策略語言撰寫）  
-- 所有內容必須以台灣中文語境撰寫，避免品牌語氣與廣告語風格  
----  
-Final Note:  
-- This is NOT a promotional or consumer-facing copy.  
-- Write with the goal of informing PMs, product designers, and marketing strategists in Taiwan.  """.strip()
-                        },
-                        {
-                            "title": "年度銷售變化",
-                            "prompt": f"""You are a senior industry analyst writing internal business reports for brand and product strategy in Taiwan.  
-Please generate a structured section titled「年度銷售變化」, focusing specifically on the annual sales volume and growth trend of the product’s **category market in Taiwan**, not the individual product itself.  
----  
-Input Parameters:  
-- Company Name: {input_company}
-- Brand Name: {input_brand}  
-- Product Name: {input_product}  
----  
-Instructions:  
-- Output must be in Traditional Chinese, using Taiwan-specific business language  
-- Focus strictly on:  
-  1. 該商品所屬類別（如：美妝、保健食品、雲端資安等）的市場年度銷售額變化  
-  2. 逐年列出過去三年實際數據與未來三年預估數據  
-  3. 每年須包含：年份、銷售額（億元）、年成長率（YoY %）  
-  4. 預估數據請標註「（預估）」  
-- Total length: 400–600 characters  
----  
-Output Formatting Requirements:  
-- 表格欄位：年份｜市場規模（億元）｜年成長率（YoY, %）  
-- 表格下方補充一段不超過 100 字的市場趨勢簡述  
-- 保持理性、商業分析語氣，避免加入消費心理與外部驅動敘述  
-- 適用不同產業，請務必泛用  """.strip()
-                        },
-                        {
-                            "title": "驅動因素與未來展望",
-                            "prompt": f"""You are a senior industry analyst writing internal business reports for brand and product strategy in Taiwan.
+#                         {
+#                             "title": "產品類型演進",
+#                             "prompt": f"""You are a senior industry analyst writing internal business reports for brand and product strategy in Taiwan.  
+# Please generate a structured section titled「產品類型演進」, describing how the product types within the relevant category have evolved in Taiwan in recent years.  
+# ---  
+# Input Parameters:  
+# - Company Name: {input_company}
+# - Brand Name: {input_brand}  
+# - Product Name: {input_product}  
+# ---  
+# Instructions:  
+# - Output must be in Traditional Chinese, using business writing tailored to Taiwanese stakeholders  
+# - Total output length should be around 700–900 characters（不含表格）  
+# - Content should focus on:  
+#   1. 台灣市場中，該類產品的類型變化與設計演進（例如：質地、功能、使用情境等）  
+#   2. 描述目前主要的幾種類型、其特色、使用族群與場景  
+#   3. 呈現品牌競爭如何由「單一指標」轉向「多功能整合」與「感官體驗」  
+#   4. 可舉出具代表性的競爭品牌或產品設計方向（不限於本品牌）  
+# - Do not explain pricing, market size, or consumer psychology—those will be addressed in other sections  
+# ---  
+# Output Formatting Requirements:  
+# - 必須包含一個表格，欄位如下：  
+#   - 類型（如：傳統類型、妝前防曬、氣墊型、防曬噴霧等）  
+#   - 功能特色  
+#   - 主要使用場景／對象  
+#   - 市場趨勢簡述（例如：穩定、快速成長、趨緩等）  
+# - 表格前或後可補充 2–3 段精簡段落，說明類型演進脈絡與競爭關鍵變化（以策略語言撰寫）  
+# - 所有內容必須以台灣中文語境撰寫，避免品牌語氣與廣告語風格  
+# ---  
+# Final Note:  
+# - This is NOT a promotional or consumer-facing copy.  
+# - Write with the goal of informing PMs, product designers, and marketing strategists in Taiwan.  """.strip()
+#                         },
+#                         {
+#                             "title": "年度銷售變化",
+#                             "prompt": f"""You are a senior industry analyst writing internal business reports for brand and product strategy in Taiwan.  
+# Please generate a structured section titled「年度銷售變化」, focusing specifically on the annual sales volume and growth trend of the product’s **category market in Taiwan**, not the individual product itself.  
+# ---  
+# Input Parameters:  
+# - Company Name: {input_company}
+# - Brand Name: {input_brand}  
+# - Product Name: {input_product}  
+# ---  
+# Instructions:  
+# - Output must be in Traditional Chinese, using Taiwan-specific business language  
+# - Focus strictly on:  
+#   1. 該商品所屬類別（如：美妝、保健食品、雲端資安等）的市場年度銷售額變化  
+#   2. 逐年列出過去三年實際數據與未來三年預估數據  
+#   3. 每年須包含：年份、銷售額（億元）、年成長率（YoY %）  
+#   4. 預估數據請標註「（預估）」  
+# - Total length: 400–600 characters  
+# ---  
+# Output Formatting Requirements:  
+# - 表格欄位：年份｜市場規模（億元）｜年成長率（YoY, %）  
+# - 表格下方補充一段不超過 100 字的市場趨勢簡述  
+# - 保持理性、商業分析語氣，避免加入消費心理與外部驅動敘述  
+# - 適用不同產業，請務必泛用  """.strip()
+#                         },
+#                         {
+#                             "title": "驅動因素與未來展望",
+#                             "prompt": f"""You are a senior industry analyst writing internal business reports for brand and product strategy in Taiwan.
 
-Please generate a structured section titled「驅動因素與未來展望」, focusing only on market drivers and forward-looking trends of the product category in Taiwan.
+# Please generate a structured section titled「驅動因素與未來展望」, focusing only on market drivers and forward-looking trends of the product category in Taiwan.
 
----
-Input Parameters:
-- Company Name: {input_company}
-- Brand Name: {input_brand}  
-- Product Name: {input_product}  
+# ---
+# Input Parameters:
+# - Company Name: {input_company}
+# - Brand Name: {input_brand}  
+# - Product Name: {input_product}  
 
----
-Instructions:
-- Output must be in Traditional Chinese, using Taiwan-specific business language
-- Length: around 500–700 characters（不得超過800字）
-- Focus strictly on:
-  1. 過去三年推動該商品類別（如防曬產品、即飲咖啡、雲端資安等）市場成長的主要因素（例如：功能需求改變、使用場景擴大、消費族群轉變）
-  2. 概述未來三年預期的市場發展方向（如：技術創新、法規政策、族群滲透、場景整合）
-  3. 若有提及數據、趨勢，請盡量以中性、客觀口吻表達，不可有廣告語氣
+# ---
+# Instructions:
+# - Output must be in Traditional Chinese, using Taiwan-specific business language
+# - Length: around 500–700 characters（不得超過800字）
+# - Focus strictly on:
+#   1. 過去三年推動該商品類別（如防曬產品、即飲咖啡、雲端資安等）市場成長的主要因素（例如：功能需求改變、使用場景擴大、消費族群轉變）
+#   2. 概述未來三年預期的市場發展方向（如：技術創新、法規政策、族群滲透、場景整合）
+#   3. 若有提及數據、趨勢，請盡量以中性、客觀口吻表達，不可有廣告語氣
 
----
-Final Notes:
-- Output should be factual, analytical, and business-oriented—not promotional
-- All content must be translated and presented in fluent Traditional Chinese for use in internal reports in Taiwan""".strip()
-                        }
+# ---
+# Final Notes:
+# - Output should be factual, analytical, and business-oriented—not promotional
+# - All content must be translated and presented in fluent Traditional Chinese for use in internal reports in Taiwan""".strip()
+#                         }
                     ]
                 },
                 {
@@ -316,57 +158,57 @@ Instructions:
 - Output must be business-focused, no promotional tone
 - 所有結果需為繁體中文，並符合台灣商務語境""".strip()
                         },
-                        {
-                            "title": "價格帶分析",
-                            "prompt": f"""You are a senior industry analyst writing internal business reports for brand and product strategy in Taiwan.
+#                         {
+#                             "title": "價格帶分析",
+#                             "prompt": f"""You are a senior industry analyst writing internal business reports for brand and product strategy in Taiwan.
 
-Please generate a section titled「價格帶分析」focusing on how the product category in Taiwan is segmented by price levels.
+# Please generate a section titled「價格帶分析」focusing on how the product category in Taiwan is segmented by price levels.
 
----
-Input Parameters:
-- Company Name: {input_company}
-- Brand Name: {input_brand}
-- Product Name: {input_product}
----
+# ---
+# Input Parameters:
+# - Company Name: {input_company}
+# - Brand Name: {input_brand}
+# - Product Name: {input_product}
+# ---
 
-Instructions:
-- Output must be in Traditional Chinese, using Taiwan-specific business language.
-- Total length should be around 500–700 characters (excluding the table).
-- Focus strictly on:
-  1. 台灣該產品類別的價格區間劃分情況
-  2. 各價格帶的價格範圍（新台幣）
-  3. 不同價格帶的主力品牌與產品定位
-  4. 各價格帶對應的目標消費族群
-- 請避免使用產品的具體銷售數字、市佔率或成長率等內容。
-- 請用表格清楚列出價格帶資訊，包含欄位：
-  - 價格帶
-  - 價格範圍
-  - 主力品牌
-  - 產品特性與定位
-  - 消費者輪廓
-- 請在表格上方補充一段簡短說明文字（不超過150字），描述台灣市場價格帶整體分布結構（例如是否為金字塔型，或呈現兩極化）
+# Instructions:
+# - Output must be in Traditional Chinese, using Taiwan-specific business language.
+# - Total length should be around 500–700 characters (excluding the table).
+# - Focus strictly on:
+#   1. 台灣該產品類別的價格區間劃分情況
+#   2. 各價格帶的價格範圍（新台幣）
+#   3. 不同價格帶的主力品牌與產品定位
+#   4. 各價格帶對應的目標消費族群
+# - 請避免使用產品的具體銷售數字、市佔率或成長率等內容。
+# - 請用表格清楚列出價格帶資訊，包含欄位：
+#   - 價格帶
+#   - 價格範圍
+#   - 主力品牌
+#   - 產品特性與定位
+#   - 消費者輪廓
+# - 請在表格上方補充一段簡短說明文字（不超過150字），描述台灣市場價格帶整體分布結構（例如是否為金字塔型，或呈現兩極化）
 
----
-Final Note:
-- The tone must be analytical and non-promotional.
-- This section is for use in strategy documents by PMs and analysts in Taiwan, so clarity and practical insight are essential.""".strip()
-                        },
-                        {
-                            "title": "平價帶市場概況",
-                            "prompt": "深入分析平價帶市場的現況，包含主要品牌、產品特色、消費者偏好、銷售通路、競爭激烈程度。"
-                        },
-                        {
-                            "title": "高價帶市場概況",
-                            "prompt": "深入分析高價帶市場的現況，包含精品品牌表現、高端消費者行為、產品差異化策略、利潤結構分析。"
-                        },
-                        {
-                            "title": "價格帶結構與策略定位",
-                            "prompt": "分析各品牌在不同價格帶的策略定位，包含品牌組合策略、價格定位邏輯、目標客群區隔、競爭策略差異。"
-                        },
-                        {
-                            "title": "價格帶市佔變化趨勢",
-                            "prompt": "追蹤各價格帶市場佔有率的變化趨勢，分析消費者購買行為在價格帶間的移轉情況，預測未來價格結構演變。"
-                        }
+# ---
+# Final Note:
+# - The tone must be analytical and non-promotional.
+# - This section is for use in strategy documents by PMs and analysts in Taiwan, so clarity and practical insight are essential.""".strip()
+#                         },
+#                         {
+#                             "title": "平價帶市場概況",
+#                             "prompt": "深入分析平價帶市場的現況，包含主要品牌、產品特色、消費者偏好、銷售通路、競爭激烈程度。"
+#                         },
+#                         {
+#                             "title": "高價帶市場概況",
+#                             "prompt": "深入分析高價帶市場的現況，包含精品品牌表現、高端消費者行為、產品差異化策略、利潤結構分析。"
+#                         },
+#                         {
+#                             "title": "價格帶結構與策略定位",
+#                             "prompt": "分析各品牌在不同價格帶的策略定位，包含品牌組合策略、價格定位邏輯、目標客群區隔、競爭策略差異。"
+#                         },
+#                         {
+#                             "title": "價格帶市佔變化趨勢",
+#                             "prompt": "追蹤各價格帶市場佔有率的變化趨勢，分析消費者購買行為在價格帶間的移轉情況，預測未來價格結構演變。"
+#                         }
                     ]
                 },
                 {
@@ -376,22 +218,22 @@ Final Note:
                             "title": "痛點分析",
                             "prompt": "深入分析消費者在該產業中遇到的主要痛點，包含產品功能不足、服務問題、價格敏感度、使用體驗困擾等核心問題。"
                         },
-                        {
-                            "title": "正面熱點事件",
-                            "prompt": "收集並分析該產業近期的正面熱點事件，包含品牌創新突破、消費者正面回饋、媒體正面報導、行業標竿案例。"
-                        },
-                        {
-                            "title": "負面熱點事件",
-                            "prompt": "分析該產業近期的負面熱點事件，包含產品問題、服務爭議、品牌危機、消費者抱怨、媒體負面報導及其影響。"
-                        },
-                        {
-                            "title": "聲量與情緒趨勢",
-                            "prompt": "追蹤該產業在社群媒體與網路平台的討論聲量變化，分析消費者情緒趨勢、話題熱度、品牌提及度、情感傾向分析。"
-                        },
-                        {
-                            "title": "痛點轉化機會",
-                            "prompt": "基於痛點分析，識別可轉化為商業機會的消費者需求缺口，提出解決方案建議、產品改善方向、服務優化機會。"
-                        }
+                        # {
+                        #     "title": "正面熱點事件",
+                        #     "prompt": "收集並分析該產業近期的正面熱點事件，包含品牌創新突破、消費者正面回饋、媒體正面報導、行業標竿案例。"
+                        # },
+                        # {
+                        #     "title": "負面熱點事件",
+                        #     "prompt": "分析該產業近期的負面熱點事件，包含產品問題、服務爭議、品牌危機、消費者抱怨、媒體負面報導及其影響。"
+                        # },
+                        # {
+                        #     "title": "聲量與情緒趨勢",
+                        #     "prompt": "追蹤該產業在社群媒體與網路平台的討論聲量變化，分析消費者情緒趨勢、話題熱度、品牌提及度、情感傾向分析。"
+                        # },
+                        # {
+                        #     "title": "痛點轉化機會",
+                        #     "prompt": "基於痛點分析，識別可轉化為商業機會的消費者需求缺口，提出解決方案建議、產品改善方向、服務優化機會。"
+                        # }
                     ]
                 },
                 {
@@ -401,14 +243,14 @@ Final Note:
                             "title": "國際政策動向",
                             "prompt": "分析影響該產業的國際政策趨勢，包含貿易政策、環保法規、技術標準、國際合作協議對市場的潛在影響。"
                         },
-                        {
-                            "title": "台灣政策動向",
-                            "prompt": "研究台灣政府對該產業的政策方向，包含產業政策、補助措施、法規變化、發展規劃對市場發展的影響。"
-                        },
-                        {
-                            "title": "ESG 與永續議題",
-                            "prompt": "分析ESG與永續發展議題對該產業的影響，包含環境責任、社會責任、公司治理要求、綠色轉型趨勢、永續商業模式。"
-                        }
+                        # {
+                        #     "title": "台灣政策動向",
+                        #     "prompt": "研究台灣政府對該產業的政策方向，包含產業政策、補助措施、法規變化、發展規劃對市場發展的影響。"
+                        # },
+                        # {
+                        #     "title": "ESG 與永續議題",
+                        #     "prompt": "分析ESG與永續發展議題對該產業的影響，包含環境責任、社會責任、公司治理要求、綠色轉型趨勢、永續商業模式。"
+                        # }
                     ]
                 },
                 {
@@ -418,14 +260,14 @@ Final Note:
                             "title": "市場概況總結",
                             "prompt": "綜合前述各項分析，總結該產業的整體市場概況，包含關鍵發現、重要趨勢、市場特徵、發展現狀的整體描述。"
                         },
-                        {
-                            "title": "為何這些變化重要",
-                            "prompt": "深入分析市場變化的重要性和意義，解釋這些趨勢對產業、品牌、消費者的影響，說明變化背後的驅動力和必要性。"
-                        },
-                        {
-                            "title": "品牌該如何應對市場變化",
-                            "prompt": "基於市場變化分析，提出品牌應對策略建議，包含策略調整方向、執行重點、資源配置建議、風險規避措施。"
-                        }
+                        # {
+                        #     "title": "為何這些變化重要",
+                        #     "prompt": "深入分析市場變化的重要性和意義，解釋這些趨勢對產業、品牌、消費者的影響，說明變化背後的驅動力和必要性。"
+                        # },
+                        # {
+                        #     "title": "品牌該如何應對市場變化",
+                        #     "prompt": "基於市場變化分析，提出品牌應對策略建議，包含策略調整方向、執行重點、資源配置建議、風險規避措施。"
+                        # }
                     ]
                 }
             ]
@@ -440,10 +282,10 @@ Final Note:
                             "title": "品牌價格策略",
                             "prompt": "分析台灣該產業的市場規模數據，包含近3-5年的市場規模變化、成長率趨勢、市場價值估算等相關統計數據。"
                         },
-                        {
-                            "title": "功能定位分析",
-                            "prompt": "探討該產業產品類型的演進歷程，包含傳統產品到新興產品的轉變、技術創新帶來的產品形態變化、消費者需求導向的產品開發趨勢。"
-                        },
+                        # {
+                        #     "title": "功能定位分析",
+                        #     "prompt": "探討該產業產品類型的演進歷程，包含傳統產品到新興產品的轉變、技術創新帶來的產品形態變化、消費者需求導向的產品開發趨勢。"
+                        # },
                     ]
                 },
                 {
@@ -453,14 +295,14 @@ Final Note:
                             "title": "品牌關鍵字",
                             "prompt": "分析台灣該產業的市場規模數據，包含近3-5年的市場規模變化、成長率趨勢、市場價值估算等相關統計數據。"
                         },
-                        {
-                            "title": "品牌視覺元素",
-                            "prompt": "探討該產業產品類型的演進歷程，包含傳統產品到新興產品的轉變、技術創新帶來的產品形態變化、消費者需求導向的產品開發趨勢。"
-                        },
-                        {
-                            "title": "品牌標語",
-                            "prompt": "探討該產業產品類型的演進歷程，包含傳統產品到新興產品的轉變、技術創新帶來的產品形態變化、消費者需求導向的產品開發趨勢。"
-                        },
+                        # {
+                        #     "title": "品牌視覺元素",
+                        #     "prompt": "探討該產業產品類型的演進歷程，包含傳統產品到新興產品的轉變、技術創新帶來的產品形態變化、消費者需求導向的產品開發趨勢。"
+                        # },
+                        # {
+                        #     "title": "品牌標語",
+                        #     "prompt": "探討該產業產品類型的演進歷程，包含傳統產品到新興產品的轉變、技術創新帶來的產品形態變化、消費者需求導向的產品開發趨勢。"
+                        # },
                     ]
                 },
                 {
@@ -500,14 +342,14 @@ Final Note:
                             "title": "人口屬性",
                             "prompt": "分析目標消費者的人口統計資料，包含年齡層分布、性別比例、教育程度、職業類別、收入水準、居住地區等基本屬性。"
                         },
-                        {
-                            "title": "消費習慣",
-                            "prompt": "深入了解目標消費者的生活型態，包含興趣愛好、價值觀念、生活習慣、社交行為、媒體使用習慣、休閒活動偏好。"
-                        },
-                        {
-                            "title": "購買動機",
-                            "prompt": "分析消費者的消費能力與購買行為模式，包含消費預算、購買頻率、決策流程、購買動機、品牌忠誠度、消費習慣。"
-                        }
+                        # {
+                        #     "title": "消費習慣",
+                        #     "prompt": "深入了解目標消費者的生活型態，包含興趣愛好、價值觀念、生活習慣、社交行為、媒體使用習慣、休閒活動偏好。"
+                        # },
+                        # {
+                        #     "title": "購買動機",
+                        #     "prompt": "分析消費者的消費能力與購買行為模式，包含消費預算、購買頻率、決策流程、購買動機、品牌忠誠度、消費習慣。"
+                        # }
                     ]
                 },
                 {
@@ -517,14 +359,14 @@ Final Note:
                             "title": "人口屬性",
                             "prompt": "分析目標消費者的人口統計資料，包含年齡層分布、性別比例、教育程度、職業類別、收入水準、居住地區等基本屬性。"
                         },
-                        {
-                            "title": "消費習慣",
-                            "prompt": "深入了解目標消費者的生活型態，包含興趣愛好、價值觀念、生活習慣、社交行為、媒體使用習慣、休閒活動偏好。"
-                        },
-                        {
-                            "title": "購買動機",
-                            "prompt": "分析消費者的消費能力與購買行為模式，包含消費預算、購買頻率、決策流程、購買動機、品牌忠誠度、消費習慣。"
-                        }
+                        # {
+                        #     "title": "消費習慣",
+                        #     "prompt": "深入了解目標消費者的生活型態，包含興趣愛好、價值觀念、生活習慣、社交行為、媒體使用習慣、休閒活動偏好。"
+                        # },
+                        # {
+                        #     "title": "購買動機",
+                        #     "prompt": "分析消費者的消費能力與購買行為模式，包含消費預算、購買頻率、決策流程、購買動機、品牌忠誠度、消費習慣。"
+                        # }
                     ]
                 },
                 {
@@ -543,14 +385,14 @@ Final Note:
                             "title": "價格策略分析",
                             "prompt": "分析目標消費者的人口統計資料，包含年齡層分布、性別比例、教育程度、職業類別、收入水準、居住地區等基本屬性。"
                         },
-                        {
-                            "title": "功能定位比較",
-                            "prompt": "深入了解目標消費者的生活型態，包含興趣愛好、價值觀念、生活習慣、社交行為、媒體使用習慣、休閒活動偏好。"
-                        },
-                        {
-                            "title": "使用情境對照",
-                            "prompt": "分析消費者的消費能力與購買行為模式，包含消費預算、購買頻率、決策流程、購買動機、品牌忠誠度、消費習慣。"
-                        }
+                        # {
+                        #     "title": "功能定位比較",
+                        #     "prompt": "深入了解目標消費者的生活型態，包含興趣愛好、價值觀念、生活習慣、社交行為、媒體使用習慣、休閒活動偏好。"
+                        # },
+                        # {
+                        #     "title": "使用情境對照",
+                        #     "prompt": "分析消費者的消費能力與購買行為模式，包含消費預算、購買頻率、決策流程、購買動機、品牌忠誠度、消費習慣。"
+                        # }
                     ]
                 },
                 {
@@ -564,10 +406,10 @@ Final Note:
                             "title": "電商平台銷量對比",
                             "prompt": "分析目標消費者的人口統計資料，包含年齡層分布、性別比例、教育程度、職業類別、收入水準、居住地區等基本屬性。"
                         },
-                        {
-                            "title": "線下通路銷量對比",
-                            "prompt": "深入了解目標消費者的生活型態，包含興趣愛好、價值觀念、生活習慣、社交行為、媒體使用習慣、休閒活動偏好。"
-                        },
+                        # {
+                        #     "title": "線下通路銷量對比",
+                        #     "prompt": "深入了解目標消費者的生活型態，包含興趣愛好、價值觀念、生活習慣、社交行為、媒體使用習慣、休閒活動偏好。"
+                        # },
                     ]
                 },
                 {

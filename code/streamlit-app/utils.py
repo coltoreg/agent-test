@@ -7,163 +7,160 @@ from datetime import datetime, timezone, timedelta
 # -----------------------------
 
 output_format = {
-  "市場概況與趨勢": {
-    "title": "市場概況與趨勢",
-    "subtopics": [
-      {
-        "title": "產業規模與成長",
-        "subsubtopics": [
-          "台灣市場規模與成長",
-          "產品類型演進",
-          "年度銷售變化",
-          "驅動因素與未來展望"
-        ]
-      },
-      {
-        "title": "主導品牌分析",
-        "subsubtopics": [
-          "主導品牌銷售概況",
-          "價格帶分析",
-          "平價帶市場概況",
-          "高價帶市場概況",
-          "價格帶結構與策略定位",
-          "價格帶市佔變化趨勢"
-        ]
-      },
-      # {
-      #   "title": "消費者痛點與聲量",
-      #   "subsubtopics": [
-      #     "痛點分析",
-      #     "正面熱點事件",
-      #     "負面熱點事件",
-      #     "聲量與情緒趨勢",
-      #     "痛點轉化機會"
-      #   ]
-      # },
-      # {
-      #   "title": "未來政策與永續趨勢",
-      #   "subsubtopics": [
-      #     "國際政策動向",
-      #     "台灣政策動向",
-      #     "ESG 與永續議題"
-      #   ]
-      # },
-      # {
-      #   "title": "市場概況與趨勢總結",
-      #   "subsubtopics": [
-      #       "市場概況總結",
-      #       "Why 為何是這些變化重要",
-      #       "How 品牌該如何應對市場變化"
-      #   ]
-      # }
-    ]
-  },
-  "品牌定位與形象": {
-    "title": "品牌定位與形象",
-    "subtopics": [
-      {
-        "title": "品牌價格與功能定位",
-        "subsubtopics": []
-      },
-      {
-        "title": "品牌形象",
-        "subsubtopics": []
-      },
-      {
-        "title": "獨特銷售主張（USP）",
-        "subsubtopics": []
-      }
-    ]
-  },
-  "產品分析": {
-    "title": "產品分析",
-    "subtopics": [
-      {
-        "title": "熱銷產品銷量",
-        "subsubtopics": []
-      },
-      {
-        "title": "主打銷售通路",
-        "subsubtopics": []
-      },
-      {
-        "title": "目標族群與使用情境",
-        "subsubtopics": []
-      },
-      {
-        "title": "產品獨特銷售主張",
-        "subsubtopics": []
-      }
-    ]
-  },
-  "消費者行為與洞察": {
-    "title": "消費者行為與洞察",
-    "subtopics": [
-      {
-        "title": "顧客輪廓",
-        "subsubtopics": [
-          "人口屬性",
-          "生活型態",
-          "消費力與行為"
-        ]
-      },
-      {
-        "title": "購買動機",
-        "subsubtopics": []
-      },
-      {
-        "title": "廣告投放策略",
-        "subsubtopics": [
-          "線上投放策略",
-          "線下場域策略"
-        ]
-      },
-      {
-        "title": "Persona",
-        "subsubtopics": []
-      }
-    ]
-  },
-  "競品分析": {
-    "title": "競品分析",
-    "subtopics": [
-      {
-        "title": "功能對比",
-        "subsubtopics": []
-      },
-      {
-        "title": "通路對比",
-        "subsubtopics": []
-      },
-      {
-        "title": "受眾與使用情境差異",
-        "subsubtopics": []
-      },
-      {
-        "title": "競品獨特銷售主張",
-        "subsubtopics": []
-      },
-      {
-        "title": "產品優劣點",
-        "subsubtopics": []
-      }
-    ]
-  },
-  "結論與建議": {
-    "title": "結論與建議",
-    "subtopics": [
-      {
-        "title": "產品賣點",
-        "subsubtopics": []
-      },
-      {
-        "title": "行銷策略",
-        "subsubtopics": []
-      }
-    ]
-  }
+    "市場概況與趨勢": {
+        "title": "市場概況與趨勢",
+        "subtopics": [
+            {
+                "title": "產業規模與成長",
+                "subsubtopics": [
+                    "台灣市場規模與成長",
+                    # "產品類型演進",
+                    # "年度銷售變化",
+                    # "驅動因素與未來展望",
+                ],
+            },
+            {
+                "title": "主導品牌分析",
+                "subsubtopics": [
+                    "主導品牌銷售概況",
+                    # "價格帶分析",
+                    # "平價帶市場概況",
+                    # "高價帶市場概況",
+                    # "價格帶結構與策略定位",
+                    # "價格帶市佔變化趨勢",
+                ],
+            },
+            {
+                "title": "消費者痛點與聲量",
+                "subsubtopics": [
+                    "痛點分析",
+                    # "正面熱點事件",
+                    # "負面熱點事件",
+                    # "聲量與情緒趨勢",
+                    # "痛點轉化機會",
+                ],
+            },
+            {
+                "title": "未來政策與永續趨勢",
+                "subsubtopics": [
+                    "國際政策動向",
+                    # "台灣政策動向",
+                    # "ESG 與永續議題",
+                ],
+            },
+            {
+                "title": "市場概況與趨勢總結",
+                "subsubtopics": [
+                    "市場概況總結",
+                    # "為何這些變化重要",
+                    # "品牌該如何應對市場變化",
+                ],
+            }
+        ],
+    },
+    "品牌定位與形象": {
+        "title": "品牌定位與形象",
+        "subtopics": [
+            {
+                "title": "品牌價格與功能定位", 
+                "subsubtopics": [
+                    "品牌價格策略", 
+                    # "功能定位分析"
+                ]
+            },
+            {
+                "title": "品牌形象", 
+                "subsubtopics": [
+                    "品牌關鍵字", 
+                    # "品牌視覺元素", 
+                    # "品牌標語"
+                ]
+            },
+            {
+                "title": "品牌獨特銷售主張（USP）", 
+                "subsubtopics": []
+            },
+        ],
+    },
+    "產品分析": {
+        "title": "產品分析",
+        "subtopics": [
+            {
+                "title": "產品獨特銷售主張（USP）", 
+                "subsubtopics": []
+            },
+            {
+                "title": "產品使用情境", 
+                "subsubtopics": []
+            },
+            {
+                "title": "產品銷量", 
+                "subsubtopics": []
+            },
+            {
+                "title": "產品銷售通路", 
+                "subsubtopics": []
+            },
+        ],
+    },
+    "受眾洞察與溝通策略建議": {
+        "title": "受眾洞察與溝通策略建議",
+        "subtopics": [
+            {
+                "title": "市場受眾概況", 
+                "subsubtopics": [
+                    "人口屬性", 
+                    # "消費習慣", 
+                    # "購買動機"
+                ]
+            },
+            {
+                "title": "商品目標受眾分析", 
+                "subsubtopics": [
+                    "人口屬性", 
+                    # "消費習慣", 
+                    # "購買動機"
+                ]
+            },
+            {
+                "title": "代表性消費者輪廓（Persona）", 
+                "subsubtopics": []
+            },
+        ],
+    },
+    "競品分析": {
+        "title": "競品分析",
+        "subtopics": [
+            {
+                "title": "競品價格與功能定位", 
+                "subsubtopics": [
+                    "價格策略分析", 
+                    # "功能定位比較", 
+                    # "使用情境對照"
+                ]
+            },
+            {
+                "title": "競品銷售狀況分析", 
+                "subsubtopics": []
+            },
+            {
+                "title": "代表通路銷量對比", 
+                "subsubtopics": [
+                    "電商平台銷量對比", 
+                    # "線下通路銷量對比"
+                ]
+            },
+            {
+                "title": "競品獨特銷售主張（USP）", 
+                "subsubtopics": []
+            },
+            {
+                "title": "與競品之優劣分析 ", 
+                "subsubtopics": []
+            },
+        ],
+    },
 }
-
 
 CHATBOT_FLOW = [key for key in output_format.keys()]
 
@@ -171,9 +168,8 @@ TOPIC_HINTS = {
     "市場概況與趨勢": "概覽市場規模、成長潛力與最新動態。",
     "品牌定位與形象": "分析品牌在市場中的角色、優勢與定位策略。",
     "產品分析": "比較熱銷產品的特色、價格帶、銷售通路與 USP。",
-    "消費者行為與洞察": "描繪目標族群的行為模式、需求痛點與社群情緒趨勢。",
+    "受眾洞察與溝通策略建議": "描繪目標族群的行為模式、需求痛點與社群情緒趨勢。",
     "競品分析": "對照主要競品的功能、價格、通路與獨特賣點。",
-    "結論與建議": "提出行銷賣點、產品優勢與線上／線下策略建議。"
 }
 
 # 合併成結構化格式
@@ -230,24 +226,34 @@ EXPORT_FORMATS = ["docx"]  #[, "pdf", "ppt"]
 
 
 def header():
-    st.set_page_config(page_title="產業分析助手", page_icon="unknown/logo.png",
-                       layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(
+        page_title="產業分析助手",
+        page_icon="unknown/logo.png",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
 
-    # ===== 全域 CSS，一次就好 =====
     st.markdown("""
     <style>
-    html,body{font-family:"Noto Sans TC","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-              background:#f9fafb;color:#334155;}
+    [data-testid="stThemeToggle"] {display:none !important;}
+    [data-testid="stToolbar"]     {display:none !important;}
+
+    :root {color-scheme: light;}
+
+    html,body{
+        font-family:"Noto Sans TC","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+        background:#f9fafb;color:#334155;
+    }
     h1,h2,h3{color:#1f2937;font-weight:700;margin:0.5rem 0 0.75rem;}
     .card{background:#fff;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,.04);
           padding:1.25rem 1.5rem;}
     .chat-box{max-height:500px;overflow-y:auto;}
-    .element-container{margin:0!important;}          /* 消掉外框空隙 */
+    .element-container{margin:0!important;}
     hr{border:none;border-top:1px solid #e5e7eb;margin:1.5rem 0;}
     </style>
     """, unsafe_allow_html=True)
 
-    # logo + 標題
+    # ===== logo + 標題 =====
     col_logo, col_title = st.columns([1,6])
     with col_logo:
         st.image("unknown/logo.png", width=80, output_format="PNG")
@@ -259,9 +265,8 @@ def header():
         <p style="font-size:1.05rem;"><strong>立即開始，掌握關鍵洞察，提升決策效率！</strong></p>
         <p style="font-size:0.95rem; color:gray;">系統維護者：Jiao</p>
         """, unsafe_allow_html=True)
+
     st.markdown("<hr/>", unsafe_allow_html=True)
-
-
 
 def show_footer():
     st.markdown(

@@ -22,13 +22,27 @@ from utils.temp_llm import claude_call, parse_claude_json
 from models.vanna import CompanyInfo, OutputFormat, QueryItem
 from services.connections import Connections
 
+from concurrent.futures import TimeoutError as FuturesTimeoutError, wait, FIRST_COMPLETED
+import base64
+import mimetypes
+
 # 按照官方加入 https://pypi.org/project/kaleido/
 # kaleido.get_chrome_sync()
 
 logger = setup_logger(__name__)
 
 # 設定超時時間 (秒)
-CHART_GENERATION_TIMEOUT = 120
+CHART_GENERATION_TIMEOUT = 60
+
+# 單張圖平均最多花多久 (秒)；
+AVG_CHART_SEC = 45
+# 整批任務最少等待多久 (秒)；避免小量任務時 timeout 太短
+MIN_PARALLEL_WAIT = 120
+
+# S3 put_object 最多重試次數（含第一次 = MAX_RETRY + 1）
+S3_MAX_RETRY = 2
+# 每次重試前靜默秒數
+S3_RETRY_SLEEP = 1.5
 
 class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
     """
@@ -64,7 +78,7 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
             config={
                 "modelId": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
                 "temperature": float(0.0),
-                "max_tokens": int(50000),
+                "max_tokens": int(5000),
             },
         )
         
@@ -176,7 +190,7 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                 logger.error("schema 資訊為空")
                 return False
             
-            logger.info(f"成功獲取 schema 資訊")
+            logger.info(f"成功獲取 schema 資訊: {df_information_schema}")
             
             # 獲取訓練計劃
             plan, error = self.safe_execute(self.get_training_plan_generic, df_information_schema)
@@ -199,18 +213,8 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
             (self.train, {"plan": plan}),
             (self.train, {
                 "documentation": """
-                CRITICAL INSTRUCTIONS - YOU MUST FOLLOW THESE RULES:
-                1. ALWAYS RETURN ONLY VALID AWS ATHENA SQL QUERIES
-                2. NEVER return explanatory text, disclaimers, or any non-SQL content
-                3. If you cannot generate a SQL query, return: SELECT 'No valid query available' as message
-                4. Queries must not reference columns that do not exist in this schema.
-                5. Always query the "default"."invoice_data_invdate" table
-                6. ALL QUERIES MUST INCLUDE invDate FILTERING.;
-
-                DATABASE SCHEMA:
-                Table: "default"."invoice_data_invdate"
-
-                COLUMNS AVAILABLE:
+                You have to give an AWS Athena SQL for each question.Table name is  "default"."invoice_data_invdate".Each query needs to specify invDate. If invDate is specified, the default is the last 14 days.This is an invoice table storing each customer's invoice data. Below are the columns and their descriptions. 
+                Columns: 
                 inv_num (invoice number),
                 aaid (Android device id),
                 idfa (iOS device id),
@@ -226,14 +230,6 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                 birthday (YYYY-MM-DD, inferred user birthday),
                 gender (inferred user gender),
                 amount (integer, total invoice amount)
-
-                
-                <error_check>
-                If there's an error, I'll explain:
-                - What went wrong
-                - Why it happened
-                - How to fix it
-                </error_check>
                 """,
                 "plan": plan
             })
@@ -373,191 +369,251 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
             return None
 
     def generate_single_chart(
-            self, 
-            question: str, 
-            uu_id_str: str, 
-            index: int, 
-            target_path: str = ""
-        ) -> Dict[str, Any]:
-        """生成單一圖表"""
+        self,
+        question: str,
+        uu_id_str: str,
+        index: int,
+        target_path: str = "",
+    ) -> Dict[str, Any]:
+        """
+        生成單一圖表  
+        1. 先嘗試 Kaleido 轉 PNG，成功→上傳 S3（.png）  
+        2. Kaleido 失敗則輸出互動 HTML → 上傳 S3（.html）  
+        3. 回傳統一為 S3 public URL
+        """
+
+        S3_MAX_RETRY = globals().get("S3_MAX_RETRY", 3)
+        S3_RETRY_SLEEP = globals().get("S3_RETRY_SLEEP", 1.0)
+
+        def _upload_to_s3(key: str, data: bytes) -> str:
+            """內部小工具：自動重試上傳並回傳 public URL"""
+            content_type, _ = mimetypes.guess_type(key)
+            content_type = content_type or "application/octet-stream"
+            s3_client = self.conn.s3_client_fbmapping()
+
+            last_err = None
+            for attempt in range(S3_MAX_RETRY + 1):
+                try:
+                    s3_client.put_object(
+                        Bucket=self.s3_bucket,
+                        Key=key,
+                        Body=data,
+                        ContentType=content_type,
+                    )
+                    url = f"https://{self.s3_bucket}.s3.amazonaws.com/{key}"
+                    logger.info(f"Uploaded to S3 ({attempt+1}/{S3_MAX_RETRY+1}): {key}")
+                    return url
+                except Exception as exc:                 # noqa: BLE001
+                    last_err = exc
+                    logger.warning(f"S3 put_object 失敗 ({attempt+1}): {exc}")
+                    time.sleep(S3_RETRY_SLEEP)
+
+            raise RuntimeError(f"S3 上傳失敗 ({S3_MAX_RETRY+1} attempts): {last_err}")
+
         try:
-            logger.info(f"正在生成圖表 {index}")
-            logger.info(f"問題: {question.strip()}")
-            
-            # 使用 Vanna 生成結果
-            result, error = self.safe_execute(
-                self.ask,
-                question=question.strip(),
-                allow_llm_to_see_data=True,
-                print_results=True,
+            logger.info(f"📈 產生圖表 {index}: {question[:120]}…")
+
+            # ---------- 1. 取得 (df, sql, fig) ----------
+            result, err = self.safe_execute(
+                self.ask, question=question.strip(), allow_llm_to_see_data=True
             )
-            #logger.info(f"Vanna ask 結果: {result}")
-            
-            if error:
-                logger.error(f"Vanna ask 失敗: {error}")
-                return {
-                    "title_text": f"錯誤: {question[:30]}...",
-                    "img_html": None,
-                    "error": error
-                }
-            
-            if not result or len(result) < 3:
-                logger.warning(f"Vanna 回應格式不正確: {result}")
-                return {
-                    "title_text": f"無結果: {question[:30]}...",
-                    "img_html": None,
-                    "error": "無有效結果"
-                }
-            
-            fig = result[2] if len(result) > 2 else None
-            title_text = "無標題"
-            img_html_content = None
-            
+            if err or not result or len(result) < 3:
+                msg = err or "無有效結果"
+                logger.error(f"Vanna 回傳錯誤 / 格式不正確: {msg}")
+                return {"title_text": f"錯誤: {question[:30]}...", "img_html": None, "error": msg}
+
+            fig = result[2]
+            title_text = fig.layout.title.text if fig and fig.layout.title else f"圖表 {index+1}"
+
+            # ---------- 2. 美化 layout ----------
+            if fig:
+                fig.update_layout(
+                    margin=dict(l=40, r=20, t=60, b=120),
+                    xaxis_tickangle=-45,
+                    autosize=True,
+                )
+
+            img_url: Optional[str] = None
+
+            # ---------- 3. 嘗試 PNG ----------
             if fig is not None:
                 try:
-                    # 取得圖表標題
-                    title_text = fig.layout.title.text if fig.layout.title else f"圖表 {index + 1}"
-                    
-                    # 更新圖表佈局
-                    fig.update_layout(
-                        margin=dict(l=40, r=20, t=60, b=120),
-                        xaxis_tickangle=-45,
-                        autosize=True
-                    )
-                    
-                    # 產生 HTML 並上傳
-                    html_bytes = self.plotly_to_html(fig)
-                    if html_bytes:
-                        s3_url, upload_error = self.safe_execute(
-                            self.upload_html_to_s3,
-                            uu_id_str,
-                            index,
-                            html_bytes,
-                        )
-                        if not upload_error and s3_url:
-                            img_html_content = s3_url
-                    
-                except Exception as e:
-                    logger.error(f"處理圖表時發生錯誤: {str(e)}")
-                    title_text = f"處理錯誤: {question[:30]}..."
-            
+                    png_bytes = fig.to_image(format="png", width=1200, height=800, scale=2)
+                    key = f"vanna/{uu_id_str}/fig_{index}.png"
+                    img_url = _upload_to_s3(key, png_bytes)
+                    logger.info(f"✅ PNG 完成並上傳 ({len(png_bytes)} bytes)")
+                except Exception as e:                   # noqa: BLE001
+                    logger.warning(f"Kaleido 產生 PNG 失敗：{e}")
+
+            # ---------- 4. 退回 HTML ----------
+            if img_url is None and fig is not None:
+                html_bytes = self.plotly_to_html(fig)
+                if html_bytes:
+                    key = f"vanna/{uu_id_str}/fig_{index}.html"
+                    try:
+                        img_url = _upload_to_s3(key, html_bytes)
+                        logger.info("✅ HTML 上傳完成")
+                    except Exception as e:               # noqa: BLE001
+                        logger.error(f"S3 上傳 HTML 失敗: {e}")
+
+            # ---------- 5. 組裝回傳 ----------
             vanna_result = {
+                "chart_id": uuid.uuid4().hex[:8],
                 "title_text": title_text,
-                "img_html": img_html_content,
+                "img_html": img_url,          # S3 public URL 或 None
                 "question": question,
-                "target_path": target_path
+                "target_path": target_path,
             }
-            
-            logger.info(f"圖表 {index} 生成完成，標題為: {title_text}")
+            logger.info(f"🎉 圖表 {index} 完成（{'PNG' if img_url and img_url.endswith('.png') else 'HTML'}）")
             return vanna_result
-            
-        except Exception as e:
-            logger.error(f"生成圖表 {index} 時發生未預期錯誤: {str(e)}")
-            return {
-                "title_text": f"錯誤: {question[:30]}...",
-                "img_html": None,
-                "error": str(e)
+
+        except Exception as e:                             # noqa: BLE001
+            logger.error(f"生成圖表 {index} 未預期錯誤: {e}", exc_info=True)
+            return {"title_text": f"錯誤: {question[:30]}...", "img_html": None, "error": str(e)}
+
+
+    def generate_charts_parallel(
+        self,
+        sql_queries: List[QueryItem],
+        uu_id_str: str,
+    ) -> Tuple[Dict[str, Any], int]:
+        """
+        並行產生多張圖（動態 timeout，不因單一慢任務拖累整批）
+        """
+        MIN_PARALLEL_WAIT = globals().get("MIN_PARALLEL_WAIT", 30)   # s
+        AVG_CHART_SEC = globals().get("AVG_CHART_SEC",    20)   # s/圖
+
+        results: Dict[str, Any] = {}
+        success_cnt = 0
+
+        total_timeout = max(MIN_PARALLEL_WAIT, AVG_CHART_SEC * len(sql_queries))
+        logger.info(f"[Parallel] {len(sql_queries)} charts | timeout={total_timeout:.1f}s")
+
+        start_ts = time.time()
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_key = {
+                executor.submit(
+                    self.generate_single_chart,
+                    q["question"],
+                    uu_id_str,
+                    i,
+                    q["path"],
+                ): f"{q['title']}__{i}"
+                for i, q in enumerate(sql_queries)
             }
 
-    def generate_charts_parallel(self, sql_queries: List[QueryItem], uu_id_str: str) -> Tuple[Dict[str, Any], int]:
-        """並行生成圖表"""
-        results = {}
-        successful_results = 0
-        
-        try:
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                # 提交任務，使用 title 作為 key
-                future_to_key = {
-                    executor.submit(
-                        self.generate_single_chart, 
-                        query["question"], 
-                        uu_id_str, 
-                        i,
-                        query["path"]
-                    ): query["title"]
-                    for i, query in enumerate(sql_queries)
-                }
-                
-                # 處理結果
-                for future in as_completed(future_to_key, timeout=CHART_GENERATION_TIMEOUT):
-                    try:
-                        key = future_to_key[future]
-                        result = future.result(timeout=10)
-                        results[key] = result
-                        
-                        if result.get("img_html"):
-                            successful_results += 1
-                            
-                    except Exception as e:
-                        key = future_to_key[future]
-                        logger.error(f"任務 {key} 執行失敗: {str(e)}")
-                        results[key] = {
-                            "title_text": f"任務失敗: {key}",
-                            "img_html": None,
-                            "error": str(e)
-                        }
-        
-        except TimeoutError:
-            logger.error("圖表生成超時")
-            # 填充未完成的結果
-            for future, key in future_to_key.items():
-                if key not in results:
-                    results[key] = {
-                        "title_text": f"任務超時: {key}",
-                        "img_html": None,
-                        "error": "執行超時"
-                    }
-        
-        return results, successful_results
+            done, not_done = wait(future_to_key.keys(), timeout=total_timeout, return_when=FIRST_COMPLETED)
+
+            # 已完成
+            for fut in done:
+                key = future_to_key[fut]
+                try:
+                    res = fut.result()
+                    results[key] = res
+                    if res.get("img_html"):
+                        success_cnt += 1
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"任務 {key} 失敗: {e}")
+                    results[key] = {"title_text": f"任務失敗: {key}", "img_html": None, "error": str(e)}
+
+            # 尚未完成
+            for fut in not_done:
+                key = future_to_key[fut]
+                remaining = total_timeout - (time.time() - start_ts)
+                if remaining <= 0:
+                    fut.cancel()
+                    results[key] = {"title_text": f"任務超時: {key}", "img_html": None, "error": "執行超時"}
+                    logger.warning(f"任務 {key} 超時 (no remaining time)")
+                    continue
+                try:
+                    res = fut.result(timeout=remaining)
+                    results[key] = res
+                    if res.get("img_html"):
+                        success_cnt += 1
+                except FuturesTimeoutError:
+                    fut.cancel()
+                    results[key] = {"title_text": f"任務超時: {key}", "img_html": None, "error": "執行超時"}
+                    logger.warning(f"任務 {key} 超時")
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"任務 {key} 失敗: {e}")
+                    results[key] = {"title_text": f"任務失敗: {key}", "img_html": None, "error": str(e)}
+
+        return results, success_cnt
+
 
     def collect_sql_queries(self, output_format: OutputFormat) -> List[QueryItem]:
         """
-        從巢狀結構中蒐集所有非空白的 sql_text。
-        - 支援 sql_text 是字串或 list[str]
-        - 自動排除完全為空的 [""] 或 ["  "]
-        """
-        queries = []
+        走訪 output_format 巢狀結構，收集所有「非空白」的 sql_text。
 
-        def traverse(node, path=""):
+        - `sql_text` 可能是 str 或 list[str]，一律轉成 list 處理
+        - 自動排除完全為空白的項目（如 "" 或 "   "）
+        - 重點：忽略最外層「主題名稱」那一層，讓 path
+        與 `_build_path_to_key()` 產生的 key 對齊
+        """
+        queries: List[QueryItem] = []
+
+        def traverse(node: Any, path: str = "", is_topic_level: bool = False) -> None:
+            """
+            node: 目前走訪到的節點 (dict / 其他)
+            path: 目前節點在整棵樹中的路徑字串，例：subtopics.1.subsubtopics.3
+            is_topic_level: True 代表「最外層主題」那一層；其路徑不應再被加進 path
+            """
+
             if not isinstance(node, dict):
                 return
 
-            # 1️⃣ 整理出目前節點的 sql_text（若有）
+            # 判斷這一層是否為「主題層」（最外層，通常同時擁有 title 與 subtopics）
+            current_is_topic = is_topic_level
+
+            # 先處理本層的 sql_text（若有）
             if "sql_text" in node:
                 raw_sql = node["sql_text"]
-
-                # 讓 raw_sql 一律變成 list，便於統一處理
-                if isinstance(raw_sql, str):
-                    raw_sql = [raw_sql]
+                # 統一轉成 list 方便處理
+                raw_sql = [raw_sql] if isinstance(raw_sql, str) else raw_sql
 
                 if isinstance(raw_sql, list):
                     for idx, sql in enumerate(raw_sql):
-                        # 保留「strip 後仍有內容」的 sql
                         if isinstance(sql, str) and sql.strip():
+
+                            logger.info(
+                                "[SQL] path=%s | title=%s | sql=%s...",
+                                path.lstrip("."), node.get("title", ""), sql.strip()[:50]
+                            )
+
                             queries.append(
                                 {
                                     "question": sql.strip(),
                                     "title": node.get("title", ""),
-                                    "path": path,
+                                    "path": path.lstrip("."),   # 去掉前導 '.' 以免後續比對出錯
                                     "index": idx,
                                 }
                             )
 
-            # 2️⃣ 繼續往下走訪巢狀結構
+            # 繼續走訪子節點
             for key, value in node.items():
-                if key in ("subtopics", "subsubtopics"):
-                    # 這兩個鍵一定是 list
+                # 兩個固定的巢狀鍵：subtopics / subsubtopics（一定是 list）
+                if key in ("subtopics", "subsubtopics") and isinstance(value, list):
                     for idx, item in enumerate(value):
-                       new_path = f"{path}.{key}.{idx}" if path else f"{key}.{idx}"
-                       traverse(item, new_path)
+                        # 加入目前索引，確保 path = subtopics.<n>[.subsubtopics.<m>]
+                        next_path = f"{path}.{key}.{idx}" if path else f"{key}.{idx}"
+                        traverse(item, next_path, False)
+
+                # 其餘一般 dict
                 elif isinstance(value, dict):
-                    traverse(value, f"{path}.{key}" if path else key)
+                    next_path = path if current_is_topic else (f"{path}.{key}" if path else key)
+                    traverse(value, next_path, False)
+
+                # list 但元素可能是 dict
                 elif isinstance(value, list):
                     for item in value:
                         if isinstance(item, dict):
-                            traverse(item, f"{path}.{key}" if path else key)
+                            next_path = path if current_is_topic else (f"{path}.{key}" if path else key)
+                            traverse(item, next_path, False)
 
-        traverse(output_format)
+        # 針對每個「主題」個別啟動一次遞迴
+        for topic_dict in output_format.values():
+            traverse(topic_dict, "", True)
+        
         return queries
 
 
@@ -583,18 +639,18 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 "title": "台灣市場規模與成長",
                                 "sql_text": [""]
                             },
-                            {
-                                "title": "產品類型演進",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "年度銷售變化",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "驅動因素與未來展望",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "產品類型演進",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "年度銷售變化",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "驅動因素與未來展望",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -617,84 +673,58 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                     6.結果適合用於製作圓餅圖
                                 3. 銷售額是 unit_price * quantity
                                 請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
-                                請優化產生的 Plotly 圖表，要求如下：
-                                1. 使用乾淨現代的風格（白色背景、清晰字體、可讀性高的標籤）。
-                                2. 調整版面配置（包含圖表標題、座標軸標籤、邊距等）。
-                                3. 增加互動性功能，例如提示框（tooltip）、縮放、拖曳移動。
-                                4. 請使用 `plotly.offline.plot()` 或 `fig.to_html()` 將圖表轉換為獨立的 HTML 字串，可嵌入網頁使用。
-                                5. 請只回傳 HTML 字串，不要回傳圖表物件。
-                                6. 所有必要的 JS/CSS 請內嵌，確保離線也可顯示。
-                                目的是讓圖表在網站上呈現時更美觀且專業。
                                 """]
                             },
-                            {
-                                "title": "價格帶分析",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "平價帶市場概況",
-                                "sql_text": [f"""
-                                {input_date}銷售{input_brand} {input_product}前10名的品牌，
-                                    1.請找出與 {input_brand} 在 {input_product} 市場的主要競爭品牌，要求：
-                                    1.列出 5 個直接競爭對手品牌定向是平價品牌
-                                    2.包含國際知名品牌和本土品牌
-                                    3.確保這些品牌都有生產類似{input_product}的產品
-                                2.請撰寫一個 AWS Athena SQL 查詢，用於比較各品牌間的銷售額，要求
-                                    1.使用 CASE WHEN 語句來分類品牌
-                                    2.使用正則表達式提取品牌名稱
-                                    3.計算每個競爭品牌的總銷售額
-                                    4.將{input_brand}單獨歸類
-                                    5.非競爭品牌歸類為 "其他品牌"
-                                    6.結果適合用於製作圓餅圖
-                                3. 銷售額是 unit_price * quantity
-                                請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
-                                請優化產生的 Plotly 圖表，要求如下：
-                                1. 使用乾淨現代的風格（白色背景、清晰字體、可讀性高的標籤）。
-                                2. 調整版面配置（包含圖表標題、座標軸標籤、邊距等）。
-                                3. 增加互動性功能，例如提示框（tooltip）、縮放、拖曳移動。
-                                4. 請使用 `plotly.offline.plot()` 或 `fig.to_html()` 將圖表轉換為獨立的 HTML 字串，可嵌入網頁使用。
-                                5. 請只回傳 HTML 字串，不要回傳圖表物件。
-                                6. 所有必要的 JS/CSS 請內嵌，確保離線也可顯示。
-                                目的是讓圖表在網站上呈現時更美觀且專業。
-
-                                """]
-                            },
-                            {
-                                "title": "高價帶市場概況",
-                                "sql_text": [f"""
-                                {input_date}銷售{input_brand} {input_product}前10名的品牌，
-                                    1.請找出與 {input_brand} 在 {input_product} 市場的主要競爭品牌，要求：
-                                    1.列出 5 個直接競爭對手品牌定向是高端品牌
-                                    2.包含國際知名品牌和本土品牌
-                                    3.確保這些品牌都有生產類似{input_product}的產品
-                                2.請撰寫一個 AWS Athena SQL 查詢，用於比較各品牌間的銷售額，要求
-                                    1.使用 CASE WHEN 語句來分類品牌
-                                    2.使用正則表達式提取品牌名稱
-                                    3.計算每個競爭品牌的總銷售額
-                                    4.將{input_brand}單獨歸類
-                                    5.非競爭品牌歸類為 "其他品牌"
-                                    6.結果適合用於製作圓餅圖
-                                3. 銷售額是 unit_price * quantity
-                                請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
-                                請優化產生的 Plotly 圖表，要求如下：
-                                1. 使用乾淨現代的風格（白色背景、清晰字體、可讀性高的標籤）。
-                                2. 調整版面配置（包含圖表標題、座標軸標籤、邊距等）。
-                                3. 增加互動性功能，例如提示框（tooltip）、縮放、拖曳移動。
-                                4. 請使用 `plotly.offline.plot()` 或 `fig.to_html()` 將圖表轉換為獨立的 HTML 字串，可嵌入網頁使用。
-                                5. 請只回傳 HTML 字串，不要回傳圖表物件。
-                                6. 所有必要的 JS/CSS 請內嵌，確保離線也可顯示。
-                                目的是讓圖表在網站上呈現時更美觀且專業。
-
-                                """]
-                            },
-                            {
-                                "title": "價格帶結構與策略定位",
-                                "sql_text": [""] #Table not ready
-                            },
-                            {
-                                "title": "價格帶市佔變化趨勢",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "價格帶分析",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "平價帶市場概況",
+                            #     "sql_text": [f"""
+                            #     {input_date}銷售{input_brand} {input_product}前10名的品牌，
+                            #         1.請找出與 {input_brand} 在 {input_product} 市場的主要競爭品牌，要求：
+                            #         1.列出 5 個直接競爭對手品牌定向是平價品牌
+                            #         2.包含國際知名品牌和本土品牌
+                            #         3.確保這些品牌都有生產類似{input_product}的產品
+                            #     2.請撰寫一個 AWS Athena SQL 查詢，用於比較各品牌間的銷售額，要求
+                            #         1.使用 CASE WHEN 語句來分類品牌
+                            #         2.使用正則表達式提取品牌名稱
+                            #         3.計算每個競爭品牌的總銷售額
+                            #         4.將{input_brand}單獨歸類
+                            #         5.非競爭品牌歸類為 "其他品牌"
+                            #         6.結果適合用於製作圓餅圖
+                            #     3. 銷售額是 unit_price * quantity
+                            #     請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
+                            #     """]
+                            # },
+                            # {
+                            #     "title": "高價帶市場概況",
+                            #     "sql_text": [f"""
+                            #     {input_date}銷售{input_brand} {input_product}前10名的品牌，
+                            #         1.請找出與 {input_brand} 在 {input_product} 市場的主要競爭品牌，要求：
+                            #         1.列出 5 個直接競爭對手品牌定向是高端品牌
+                            #         2.包含國際知名品牌和本土品牌
+                            #         3.確保這些品牌都有生產類似{input_product}的產品
+                            #     2.請撰寫一個 AWS Athena SQL 查詢，用於比較各品牌間的銷售額，要求
+                            #         1.使用 CASE WHEN 語句來分類品牌
+                            #         2.使用正則表達式提取品牌名稱
+                            #         3.計算每個競爭品牌的總銷售額
+                            #         4.將{input_brand}單獨歸類
+                            #         5.非競爭品牌歸類為 "其他品牌"
+                            #         6.結果適合用於製作圓餅圖
+                            #     3. 銷售額是 unit_price * quantity
+                            #     請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
+                            #     """]
+                            # },
+                            # {
+                            #     "title": "價格帶結構與策略定位",
+                            #     "sql_text": [""] #Table not ready
+                            # },
+                            # {
+                            #     "title": "價格帶市佔變化趨勢",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -704,22 +734,22 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 "title": "痛點分析",
                                 "sql_text": [""]
                             },
-                            {
-                                "title": "正面熱點事件",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "負面熱點事件",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "聲量與情緒趨勢",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "痛點轉化機會",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "正面熱點事件",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "負面熱點事件",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "聲量與情緒趨勢",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "痛點轉化機會",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -729,14 +759,14 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 "title": "國際政策動向",
                                 "sql_text": [""]
                             },
-                            {
-                                "title": "台灣政策動向",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "ESG 與永續議題",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "台灣政策動向",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "ESG 與永續議題",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -746,14 +776,14 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 "title": "市場概況總結",
                                 "sql_text": [""]
                             },
-                            {
-                                "title": "為何這些變化重要",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "品牌該如何應對市場變化",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "為何這些變化重要",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "品牌該如何應對市場變化",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     }
                 ]
@@ -768,10 +798,10 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 "title": "品牌價格策略",
                                 "sql_text": [""]
                             },
-                            {
-                                "title": "功能定位分析",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "功能定位分析",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -781,14 +811,14 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 "title": "品牌關鍵字",
                                 "sql_text": [""]
                             },
-                            {
-                                "title": "品牌視覺元素",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "品牌標語",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "品牌視覺元素",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "品牌標語",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -850,23 +880,23 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
                                """]
                             },
-                            {
-                                "title": "消費習慣",
-                                # "sql_text": [""]
-                                "sql_text": [f"""
-                                找出{input_date}購買{input_brand} {input_product}年齡和性別發票平均金額，
-                                1.年齡分成 18-24, 25-34, 35-44, 45-54, 55-64, 65+
-                                2.性別分成 男性, 女性
-                                3.一張發票會有很多的產品，每個產品的 amount都是一樣，但這是不對，要寫一個子句找出 每個 inv_num 的MAX(amount) AS invoice_amount
-                                4.X 軸是年齡，Y 軸是發票平均金額，維度是性別
-                                5.請撰寫一個 AWS Athena SQL 查詢，使用長條圖顯示年齡和性別的發票平均金額
-                                請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
-                                """]
-                            },
-                            {
-                                "title": "購買動機",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "消費習慣",
+                            #     # "sql_text": [""]
+                            #     "sql_text": [f"""
+                            #     找出{input_date}購買{input_brand} {input_product}年齡和性別發票平均金額，
+                            #     1.年齡分成 18-24, 25-34, 35-44, 45-54, 55-64, 65+
+                            #     2.性別分成 男性, 女性
+                            #     3.一張發票會有很多的產品，每個產品的 amount都是一樣，但這是不對，要寫一個子句找出 每個 inv_num 的MAX(amount) AS invoice_amount
+                            #     4.X 軸是年齡，Y 軸是發票平均金額，維度是性別
+                            #     5.請撰寫一個 AWS Athena SQL 查詢，使用長條圖顯示年齡和性別的發票平均金額
+                            #     請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
+                            #     """]
+                            # },
+                            # {
+                            #     "title": "購買動機",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -876,14 +906,14 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 "title": "人口屬性",
                                 "sql_text": [""]
                             },
-                            {
-                                "title": "消費習慣",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "購買動機",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "消費習慣",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "購買動機",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -902,14 +932,14 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 "title": "價格策略分析",
                                 "sql_text": [""]
                             },
-                            {
-                                "title": "功能定位比較",
-                                "sql_text": [""]
-                            },
-                            {
-                                "title": "使用情境對照",
-                                "sql_text": [""]
-                            }
+                            # {
+                            #     "title": "功能定位比較",
+                            #     "sql_text": [""]
+                            # },
+                            # {
+                            #     "title": "使用情境對照",
+                            #     "sql_text": [""]
+                            # }
                         ]
                     },
                     {
@@ -961,31 +991,31 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                 請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
                                 """]
                             },
-                            {
-                                "title": "線下通路銷量對比",
-                                # "sql_text": [""]
-                                "sql_text": [f"""
-                                找出{input_date}銷售額 {input_brand} {input_product}前10名的品牌
-                                1.先寫出一個字句排除 storeName 是電子商務平台的條件，例如 MOMO, PChome, Yahoo, 蝦皮, 請根據實際情況修改，
-                                2.storeName 是 NaN (storeName not like '%NaN%') 也需要排除
-                                3.只需要銷售額前10名的storeName 和銷售額前5名的品牌
-                                4.請找出與{input_brand} {input_product}市場的主要競爭品牌，要求：
-                                  1.列出 10 個直接競爭對手，
-                                  2.包含國際知名品牌和本土品牌
-                                  3.確保這些品牌都有生產類似{input_product}的產品
-                                5.請撰寫一個 AWS Athena SQL 查詢，用於比較各品牌間的銷售額，要求
-                                  1.使用 CASE WHEN 語句來分類品牌
-                                  2.使用正則表達式提取品牌名稱
-                                  3.計算每個競爭品牌的總銷售額
-                                  4.將{input_brand}單獨歸類
-                                  5.非競爭品牌歸類為 "其他品牌"
-                                  6.結果適合用於製作長條圖，圖不需要其他品牌
-                                6. 銷售額是 unit_price * quantity
-                                7. 結果適合用於製作長條圖，圖不需要其他品牌，x 軸是storeName，y 軸是銷售額，維度是品牌名稱,
-                                8. 只需要一張圖，圖的顏色要區分銷售佔比
-                                請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
-                                """]
-                            }
+                            # {
+                            #     "title": "線下通路銷量對比",
+                            #     # "sql_text": [""]
+                            #     "sql_text": [f"""
+                            #     找出{input_date}銷售額 {input_brand} {input_product}前10名的品牌
+                            #     1.先寫出一個字句排除 storeName 是電子商務平台的條件，例如 MOMO, PChome, Yahoo, 蝦皮, 請根據實際情況修改，
+                            #     2.storeName 是 NaN (storeName not like '%NaN%') 也需要排除
+                            #     3.只需要銷售額前10名的storeName 和銷售額前5名的品牌
+                            #     4.請找出與{input_brand} {input_product}市場的主要競爭品牌，要求：
+                            #       1.列出 10 個直接競爭對手，
+                            #       2.包含國際知名品牌和本土品牌
+                            #       3.確保這些品牌都有生產類似{input_product}的產品
+                            #     5.請撰寫一個 AWS Athena SQL 查詢，用於比較各品牌間的銷售額，要求
+                            #       1.使用 CASE WHEN 語句來分類品牌
+                            #       2.使用正則表達式提取品牌名稱
+                            #       3.計算每個競爭品牌的總銷售額
+                            #       4.將{input_brand}單獨歸類
+                            #       5.非競爭品牌歸類為 "其他品牌"
+                            #       6.結果適合用於製作長條圖，圖不需要其他品牌
+                            #     6. 銷售額是 unit_price * quantity
+                            #     7. 結果適合用於製作長條圖，圖不需要其他品牌，x 軸是storeName，y 軸是銷售額，維度是品牌名稱,
+                            #     8. 只需要一張圖，圖的顏色要區分銷售佔比
+                            #     請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
+                            #     """]
+                            # }
                         ]
                     },
                     {
@@ -1006,18 +1036,51 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
         
         return output_format
     
-    def upload_html_to_s3(self, uu_id: str, idx: int, html_bytes: bytes) -> str:
-        """將 HTML bytes 上傳至 S3，回傳公開 URL（SRP：單一職責：上傳）"""
-        key = f"vanna/{uu_id}/fig_{idx}.html"
+    def upload_chart_to_s3(
+        self,
+        uu_id: str,
+        idx: int,
+        file_bytes: bytes,
+        *,
+        fmt: str = "html",  # 'html' 或 'png'
+    ) -> str:
+        """
+        將圖表（HTML / PNG）上傳到 S3  
+        - fmt='html' → vanna/<id>/fig_<n>.html , ContentType=text/html  
+        - fmt='png'  → vanna/<id>/fig_<n>.png  , ContentType=image/png  
+        失敗自動重試 `S3_MAX_RETRY` 次；成功回傳公開 URL
+        """
+        if fmt not in {"html", "png"}:
+            raise ValueError(f"Unsupported fmt: {fmt}")
+
+        # ---------- 1. S3 key & MIME ----------
+        ext_map = {"html": ("html", "text/html"), "png": ("png", "image/png")}
+        ext, mime = ext_map[fmt]
+        key = f"vanna/{uu_id}/fig_{idx}.{ext}"
         s3_client = self.conn.s3_client_fbmapping()
-        s3_client.put_object(
-            Bucket=self.s3_bucket,
-            Key=key,
-            Body=html_bytes,
-            ContentType="text/html",
-        )
-        logger.info(f"Uploaded HTML to S3: {key}")
-        return f"https://{self.s3_bucket}.s3.amazonaws.com/{key}"
+
+        # ---------- 2. put_object with retry ----------
+        last_err: Optional[Exception] = None
+        for attempt in range(S3_MAX_RETRY + 1):
+            try:
+                s3_client.put_object(
+                    Bucket=self.s3_bucket,
+                    Key=key,
+                    Body=file_bytes,
+                    ContentType=mime,
+                )
+                url = f"https://{self.s3_bucket}.s3.amazonaws.com/{key}"
+                logger.info(
+                    f"Uploaded {fmt.upper()} to S3 (try {attempt+1}/{S3_MAX_RETRY+1}): {key}"
+                )
+                return url
+            except Exception as e:      # noqa: BLE001
+                last_err = e
+                logger.warning(f"S3 put_object 失敗 (try {attempt+1}): {e}")
+                time.sleep(S3_RETRY_SLEEP)
+                # ---------- 3. 全部嘗試失敗 ----------
+                raise RuntimeError(f"S3 上傳{fmt.upper()}失敗 ({S3_MAX_RETRY+1} attempts): {last_err}")
+
         
     def _verify_indices(self) -> None:
         """驗證必要的索引是否存在"""

@@ -30,7 +30,4 @@
 - 等待...碰運氣...
 
 
-4. ```Handler error: An error occurred (dependencyFailedException) when calling the InvokeAgent operation: Your request couldn't be completed. Lambda function <lambda-arn> encountered a problem while processing request.The error message from the Lambda function is Unhandled. Check the Lambda function log for error details, then try your request again after fixing the error.```
-
-
 ### 

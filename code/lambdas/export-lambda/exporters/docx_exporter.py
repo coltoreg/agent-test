@@ -1185,48 +1185,82 @@ class DocxExporter(Exporter):
             doc.add_paragraph(f"處理內容時發生錯誤: {str(e)}")
 
     def insert_chart_with_position_info(self, doc, chart_id, position_info):
-        """使用位置信息正確插入圖表 - 簡化版本"""
+        """
+        依 position_info 將圖表插入 Word。
+        優先順序：
+        1. img_static_b64
+        2. img_html_b64
+        3. 解析 img_html (S3 連結或 bytes) 裡的 data:image/png;base64
+        4. img_static.bytes / img_static
+        找不到就留錯誤提示。
+        """
         try:
-            # 從位置信息中找到對應的圖表
-            target_chart = None
-            for page_info in position_info.values():
-                for chart_info in page_info:
-                    if chart_info.get("chart_id") == chart_id:
-                        target_chart = chart_info
-                        break
-                if target_chart:
-                    break
-            
-            if target_chart:
-                title_text = target_chart.get("title_text", "")
-                
-                # 統一只使用 img_static_b64 字段
-                img_static_b64 = target_chart.get("img_static_b64")
-                
-                if img_static_b64:
-                    try:
-                        # 統一的解碼邏輯
-                        img_static = base64.b64decode(img_static_b64)
-                        self.process_vanna_static_image(doc, img_static, title_text)
-                        
-                        logger.info(f"✅ 成功插入圖表: {title_text} ({len(img_static)} bytes)")
-                        logger.info(f"📍 位置: {target_chart.get('target_section', '未知章節')}")
-                        
-                    except Exception as decode_err:
-                        logger.error(f"❌ 圖表 {chart_id} base64 解碼失敗: {decode_err}")
-                        self.add_error_placeholder(doc, f"圖表解碼失敗: {chart_id}")
-                else:
-                    logger.warning(f"❌ 圖表 {chart_id} 缺少 img_static_b64 數據")
-                    self.add_error_placeholder(doc, f"圖表數據缺失: {chart_id}")
-            else:
-                logger.warning(f"❌ 找不到圖表 {chart_id} 的位置信息")
-                available_ids = [chart.get('chart_id') for page_charts in position_info.values() for chart in page_charts]
-                logger.warning(f"可用圖表ID: {available_ids}")
+            # ------ 找到 meta --------------------------------------------------
+            target = next(
+                (c for pg in position_info.values() for c in pg
+                 if c.get("chart_id") == chart_id),
+                None
+            )
+            if not target:
                 self.add_error_placeholder(doc, f"找不到圖表: {chart_id}")
-            
+                return
+
+            title_text = target.get("title_text", "").strip()
+
+            # ------ 1‧2：直接用現成 base64 ------------------------------------
+            img_b64 = (
+                target.get("img_static_b64")
+                or target.get("img_html_b64")
+            )
+            img_bytes = base64.b64decode(img_b64) if img_b64 else None
+
+            # ------ 3：解析 HTML 抓快照 ---------------------------------------
+            if img_bytes is None:
+                html_field = target.get("img_html")
+                html_bytes = None
+
+                if isinstance(html_field, dict) and html_field.get("bytes"):
+                    html_bytes = html_field["bytes"]
+
+                elif isinstance(html_field, str) and html_field.startswith("http"):
+                    try:
+                        import requests
+                        r = requests.get(html_field, timeout=10)
+                        if r.ok:
+                            html_bytes = r.content
+                    except Exception as e:
+                        logger.warning(f"抓取 HTML 失敗: {e}")
+
+                if html_bytes:
+                    import re
+                    m = re.search(
+                        rb'data:image/png;base64,([^"\']+)',
+                        html_bytes, re.I
+                    )
+                    if m:
+                        try:
+                            img_bytes = base64.b64decode(m.group(1))
+                            logger.info(f"{chart_id} 從 HTML 取得靜態快照")
+                        except Exception as e:
+                            logger.warning(f"base64 解析失敗: {e}")
+
+            # ------ 4：fallback - 靠 img_static --------------------------------
+            if img_bytes is None:
+                static_field = target.get("img_static")
+                if isinstance(static_field, dict) and static_field.get("bytes"):
+                    img_bytes = static_field["bytes"]
+                elif isinstance(static_field, (bytes, bytearray)):
+                    img_bytes = static_field
+
+            # ------ 有圖就插，沒有就記錯 --------------------------------------
+            if img_bytes:
+                self.process_vanna_static_image(doc, img_bytes, title_text)
+            else:
+                self.add_error_placeholder(doc, f"圖表數據缺失: {chart_id}")
+
         except Exception as e:
-            logger.error(f"❌ 插入圖表 {chart_id} 時發生錯誤: {e}")
-            self.add_error_placeholder(doc, f"圖表處理失敗: {str(e)}")
+            logger.error(f"插入圖表 {chart_id} 失敗: {e}")
+            self.add_error_placeholder(doc, f"圖表處理失敗: {chart_id}")
             
     def export(self, file_path: str):
         """改進匯出流程，確保圖表正確處理"""

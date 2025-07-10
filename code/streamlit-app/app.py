@@ -24,6 +24,8 @@ from utils import (
     output_format
 )
 from connections import Connections
+# from streamlit_autorefresh import st_autorefresh
+# KEEPALIVE_MS = 55_000 # 55 秒一次，低於 ALB/Streamlit 閒置門檻
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -38,18 +40,19 @@ _JSON_RAW = re.compile(r"\bjson[\s\r\n]+(\{[\s\S]+)", re.I)  #  json\n{ ... }
 _CURLY = re.compile(r"\{[\s\S]+?\}", re.S)  # 最後保險：{ ... }
 
 def _json_block_to_html(text: str) -> str | None:
-    # NEW: 讓純 HTML 直接 pass，不要再解析
+    """
+    - 若 content 本身就是純 HTML，就直接包裝並返回
+    - 否則嘗試從 ```json ...``` 或裸 JSON 區域解析
+    """
     if text.lstrip().startswith("<"):
         return f'<div class="market-analysis-report"><div class="report-section">{text}</div></div>'
-    # -------- 1. 找 JSON 區段 --------
+
+    # ---------- 以下同舊版 ----------
     m = _JSON_FENCE.search(text) or _JSON_RAW.search(text) or _CURLY.search(text)
     if not m:
-        logger.debug("No JSON block found.")
         return None
     raw = m.group(1) if m.re is not _CURLY else m.group(0)
-    logger.debug("⭑ raw JSON snippet (head 200)：%s", raw[:200])
 
-    # -------- 2. 清理 --------
     cleaned = (
         raw.lstrip("\ufeff")
            .replace(""", '"').replace(""", '"')
@@ -58,37 +61,24 @@ def _json_block_to_html(text: str) -> str | None:
     cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
 
     def _strip_nl(mo: re.Match) -> str:
-        content = mo.group(0)
-        # 如果包含圖表相關內容，保護不被破壞
-        if any(keyword in content for keyword in ['chart-container', 'plotly', 'script']):
-            return content
-        return content.replace("\n", " ").replace("\r", " ")
-    
+        c = mo.group(0)
+        return c if any(k in c for k in ("chart-container", "plotly", "script")) else c.replace("\n", " ")
+
     cleaned = re.sub(r'"(?:\\.|[^"\\])*"', _strip_nl, cleaned)
-    logger.debug("⭑ cleaned JSON snippet (head 200)：%s", cleaned[:200])
 
-    # -------- 3. 解析 --------
     try:
-        obj: dict[str, str] = json.loads(cleaned)
+        obj = json.loads(cleaned)
         if not isinstance(obj, dict):
-            logger.debug("Parsed JSON is not a dict.")
             return None
-    except Exception as err:
-        logger.debug("json.loads() failed: %s", err)
-        # 如果JSON解析失敗但內容看起來像HTML，直接返回
-        if '<div' in text and '</div>' in text:
-            logger.info("JSON解析失敗，但內容似乎是HTML，直接使用")
-            return f'<div class="market-analysis-report"><div class="report-section">{text}</div></div>'
+    except Exception:
         return None
-    logger.info("✅ JSON parsed, subtopics = %s", list(obj.keys()))
 
-    # -------- 4. 拼 HTML --------
     parts = ['<div class="market-analysis-report">']
     for frag in obj.values():
         parts.append(f'<div class="report-section">{frag}</div>')
     parts.append("</div>")
-    html_card = "\n".join(parts)
-    return html_card
+    return "\n".join(parts)
+
 
 _ALLOWED_TAGS = ("b", "small", "em", "strong", "pre", "ul", "li", "h2", "h4", "a")
 
@@ -428,115 +418,71 @@ def get_response(user_input, session_id, selected_topic):
             
         return {"answer": user_msg, "source": ""}
 
+
 def convert_html_to_word_format(html_content: str, topic: str) -> Tuple[str, List[Dict]]:
     """
-    使用 word_export_data 中的完整數據，並記錄每個圖表的實際位置
+    將富含 <script> 的 HTML 變成 Word 友善格式：
+    1. 把 plotly 內嵌 script → [WORD_CHART_ID] 占位符
+    2. 回傳每張圖的 meta（含 base-64）給後端
     """
-    logger.info(f"🔄 開始HTML轉Word格式，主題: {topic}")
-    
-    # 1. 解析HTML結構，找出各個章節的順序和標題
-    soup = BeautifulSoup(html_content, 'html.parser')
-    section_map = {}  # 記錄各個章節的標題和在HTML中的位置
-    
-    # 找出所有h2和h3標題
-    headers = soup.find_all(['h2', 'h3'])
-    for idx, header in enumerate(headers):
-        section_title = header.get_text().strip()
-        # 移除編號前綴，例如 "2.1 主導品牌銷售概況" -> "主導品牌銷售概況"
-        clean_title = re.sub(r'^\d+\.\s*\d*\.*\s*', '', section_title)
-        section_map[idx] = {
-            'title': clean_title,
-            'element': header,
-            'position': idx
-        }
-    
-    # 2. 識別HTML中的圖表區塊並記錄它們出現在哪個章節
-    chart_pattern = r'<script>\(function\(\)\s*{[^}]+getElementById\("(plotly-placeholder-[^"]+)"[^}]+doc\.write\(`([^`]+)`\)[^}]+}\)\(\);</script>'
-    
-    extracted_charts = []
-    word_html = html_content
-    
-    # 3. 尋找所有圖表
-    matches = list(re.finditer(chart_pattern, html_content, re.DOTALL))
-    logger.info(f"🔍 在HTML中找到 {len(matches)} 個圖表腳本")
-    
-    # 從 session_state 中獲取最近的 word_export_data
-    last_response = st.session_state.get("last_lambda_response", {})
-    word_export_data = last_response.get("word_export_data", {})
-    charts_data = word_export_data.get("charts_data", {})
-    
-    logger.info(f"📊 從 word_export_data 獲取圖表數據:")
-    logger.info(f"  - 可用頁面: {list(charts_data.keys())}")
-    
-    total_available_charts = sum(len(charts) for charts in charts_data.values())
-    logger.info(f"  - 總可用圖表: {total_available_charts}")
-    
-    # 4. 為每個HTML圖表尋找對應的數據並記錄位置
-    for i, match in enumerate(matches):
-        placeholder_id = match.group(1)  # plotly-placeholder-xxxxx
+    logger.info(f"🔄 HTML ➜ Word 轉換中… topic={topic}")
+
+    soup = BeautifulSoup(html_content, "html.parser")
+    section_map = {idx: hdr.get_text(strip=True)  # 章節索引 → 標題
+                   for idx, hdr in enumerate(soup.find_all(["h2", "h3"]))}
+
+    chart_re = re.compile(
+        r'<script>\(function\(\).*?getElementById\("(?P<ph>plotly-placeholder-[^"]+)"\).*?`(?P<html>[^`]+)`.*?</script>',
+        re.S
+    )
+
+    last_resp = st.session_state.get("last_lambda_response", {})
+    charts_data = last_resp.get("word_export_data", {}).get("charts_data", {})
+
+    extracted, new_html = [], html_content
+
+    for m in chart_re.finditer(html_content):
+        placeholder_id = m.group("ph")  # plotly-placeholder-xxxx
         chart_id = placeholder_id.replace("plotly-placeholder-", "")
-        
-        logger.info(f"🎯 處理圖表 {i+1}: ID={chart_id}")
-        
-        # 找出這個圖表在HTML中的實際位置
-        chart_position = match.start()
-        target_section = None
-        
-        # 找出圖表前面最近的章節標題
-        for section_idx, section_info in section_map.items():
-            header_element = section_info['element']
-            header_position = html_content.find(str(header_element))
-            
-            if header_position != -1 and header_position < chart_position:
-                target_section = section_info['title']
+
+        # 找章節
+        chart_pos, section_name = m.start(), "未知章節"
+        for idx, title in section_map.items():
+            hdr_html = str(list(soup.find_all(["h2", "h3"]))[idx])
+            if html_content.find(hdr_html) < chart_pos:
+                section_name = re.sub(r"^\d+\.\d*\s*", "", title)  # 去前綴
             else:
-                break  # 已經超過圖表位置了
-        
-        if not target_section:
-            # 如果找不到前面的章節，可能在第一個章節
-            if section_map:
-                target_section = list(section_map.values())[0]['title']
-            else:
-                target_section = "未知章節"
-        
-        logger.info(f"📍 圖表 {chart_id} 位於章節: {target_section}")
-        
-        # 在 word_export_data 中搜索匹配的圖表
-        matching_chart = None
-        
-        for page_name, page_charts in charts_data.items():
-            for chart in page_charts:
-                if chart.get("chart_id") == chart_id:
-                    matching_chart = chart
-                    logger.info(f"✅ 在頁面 '{page_name}' 找到匹配圖表")
-                    break
-            if matching_chart:
                 break
-        
-        if matching_chart:
-            # 生成Word佔位符
-            word_placeholder = f"[WORD_CHART_{chart_id}]"
-            
-            # 替換HTML中的圖表腳本
-            word_html = word_html.replace(match.group(0), f'<div class="word-chart-placeholder">{word_placeholder}</div>')
-            
-            # 記錄圖表信息（加入實際位置信息）
-            extracted_charts.append({
-                "chart_id": chart_id,
-                "placeholder": word_placeholder,
-                "title_text": matching_chart.get("title_text", ""),
-                "img_static_b64": matching_chart.get("img_static_b64"),  # base64 字符串
-                "target_section": target_section,  # 實際所在的章節
-                "html_position": chart_position,  # 在HTML中的字符位置
-                "section_order": i,  # 在該主題中的順序
-            })
-            
-            logger.info(f"✅ 圖表轉換成功: {matching_chart.get('title_text')} -> {word_placeholder} (位於: {target_section})")
-        else:
-            logger.warning(f"❌ 找不到圖表 {chart_id} 的數據")
-    
-    logger.info(f"✅ HTML轉Word完成: 成功轉換 {len(extracted_charts)} / {len(matches)} 個圖表")
-    return word_html, extracted_charts
+
+        # 找圖表 meta
+        chart_meta = next(
+            (c for plist in charts_data.values() for c in plist if c.get("chart_id") == chart_id),
+            None
+        )
+        if not chart_meta:
+            logger.warning(f"⚠️ 找不到 {chart_id} 的 meta，跳過")
+            continue
+
+        # 若還沒有 img_static_b64，用 img_html_b64 補上
+        img_b64 = chart_meta.get("img_static_b64") or chart_meta.get("img_html_b64")
+        chart_meta["img_static_b64"] = img_b64
+
+        # 產生 Word 占位符
+        word_tag = f"[WORD_CHART_{chart_id}]"
+        new_html = new_html.replace(m.group(0), f'<div class="word-chart-placeholder">{word_tag}</div>')
+
+        extracted.append({
+            "chart_id" : chart_id,
+            "placeholder" : word_tag,
+            "title_text" : chart_meta.get("title_text", ""),
+            "img_static_b64": img_b64,
+            "target_section": section_name,
+            "html_position": chart_pos,
+        })
+
+    logger.info(f"✅ 轉換完成：{len(extracted)} 張圖表已替換為占位符")
+    return new_html, extracted
+
 
 def initialization():
     defaults = {
@@ -627,7 +573,7 @@ def show_form():
 
 # =====================   Enhanced Chat Rendering   =====================
 def _render_message(msg: dict) -> None:
-    """消息渲染，支持圖表"""
+    """增強版消息渲染，支持圖表和動態高度調整"""
     role, content = msg["role"], msg["content"]
 
     if role == "assistant":
@@ -635,9 +581,25 @@ def _render_message(msg: dict) -> None:
             '<div class="market-analysis-report">' in content
             or '<div class="report-source">' in content
         ):
+            # 檢測是否包含圖表來調整高度
+            has_charts = 'chart-container' in content or 'plotly' in content.lower()
+            chart_count = content.count('chart-container')
+            
+            # 動態計算高度
+            base_height = 700
+            if has_charts:
+                # 每個圖表增加400px高度
+                base_height += chart_count * 400
+                
+            # 確保最小和最大高度
+            final_height = max(800, min(base_height, 2000))
+            
+            logger.info(f"渲染HTML，檢測到 {chart_count} 個圖表，設定高度為 {final_height}px")
+            
             try:
                 components.html(
                     content, 
+                    height=final_height, 
                     scrolling=True
                 )
                 return
@@ -694,37 +656,46 @@ def _invoke_export_lambda(pages: list[str], fmt: str) -> None:
         st.error(f"❌ 匯出失敗：{err}")
         
 def _build_export_payload(pages: list[str], fmt: str) -> Tuple[dict, str]:
-    """增強版，包含圖表位置信息"""
-    if fmt.lower() in ["docx", "word", "doc"]:
-        last_resp = st.session_state.get("last_lambda_response", {})
-        word_data = last_resp.get("word_export_data", {})
-        if not word_data:
-            raise ValueError("❌ 找不到匯出數據，請重新生成內容")
+    """把 img_html_b64 補進 img_static_b64，並帶上 charts_position_info"""
+    if fmt.lower() not in {"docx", "word", "doc"}:
+        raise ValueError(f"尚未支援 {fmt} 匯出格式")
 
-        analysis = {}
-        charts_position_info = {}  # 圖表位置信息
-        
-        for pg in pages:
-            raw_html = st.session_state.final_answers.get(pg, [""])[-1]
-            analysis_content = raw_html.split("🤖 <b>：</b><br>", 1)[-1]
-            analysis[pg] = analysis_content
-            
-            # 🎯 提取該頁面的圖表位置信息
-            if '[WORD_CHART_' in analysis_content:
-                word_html, chart_info = convert_html_to_word_format(analysis_content, pg)
-                analysis[pg] = word_html  # 使用處理後的HTML
-                charts_position_info[pg] = chart_info  # 保存位置信息
+    last_resp = st.session_state.get("last_lambda_response", {})
+    word_data = last_resp.get("word_export_data", {})
+    charts_data = word_data.get("charts_data", {})  # {page: [chart_dict, ...]}
 
-        payload = dict(
-            company_info=st.session_state.company_info,
-            analysis=analysis,
-            format=fmt,
-            session_id=st.session_state.session_id,
-            charts_data=word_data.get("charts_data", {}),
-            charts_position_info=charts_position_info,  # 傳遞位置信息
-            export_type="docx",
-        )
-        return payload, "docx"
+    # ---------- 1. 組裝 analysis 內容並標記圖表實際位置 ----------
+    analysis = {}
+    charts_position_info = {}  # {page: [ {chart_id, ...} ]}
+
+    for pg in pages:
+        raw_block = st.session_state.final_answers.get(pg, [""])[-1]
+        html_body = raw_block.split("🤖 <b>：</b><br>", 1)[-1]
+
+        # 將 <script> 轉占位符，並回傳位置資訊
+        if "[WORD_CHART_" in html_body:
+            html_body, pos_info = convert_html_to_word_format(html_body, pg)
+            charts_position_info[pg] = pos_info
+
+        analysis[pg] = html_body
+
+    # ---------- 2. 對齊 key：確保每張圖都帶 img_static_b64 ----------
+    for page_charts in charts_data.values():
+        for ch in page_charts:
+            if not ch.get("img_static_b64") and ch.get("img_html_b64"):
+                ch["img_static_b64"] = ch["img_html_b64"]  # ★ 關鍵 1 行
+
+    # ---------- 3. 打包 Payload ----------
+    payload = {
+        "company_info" : st.session_state.company_info,
+        "analysis" : analysis,
+        "format" : fmt,
+        "session_id" : st.session_state.session_id,
+        "charts_data" : charts_data,  # 帶 base-64 後的版本
+        "charts_position_info" : charts_position_info,  # 供後端定位插圖
+        "export_type" : "docx",
+    }
+    return payload, "docx"
 
 def _call_export_lambda(payload: dict) -> dict:
     """直接回傳 `response_json`（已是 dict）"""
@@ -818,21 +789,27 @@ def _render_export_result(topic: str):
 
 # =====================   尾端控制區   =====================
 def _render_next_controls(topic: str):
-    """修改後的控制區域，增加錯誤處理"""
+    """修改後的控制區域，僅第一頁強制產出"""
+
+    # ---------- 1. 首頁仍需先產出 ----------
     if topic == CHATBOT_FLOW[0]:
+        if topic not in st.session_state.get("visited_pages", set()):
+            st.warning("⚠️ 請先完成此頁產出後再進行下一步。")
+            return
+
         next_idx = CHATBOT_FLOW.index(topic) + 1
         if next_idx < len(CHATBOT_FLOW):
             nxt = CHATBOT_FLOW[next_idx]
             if st.button(f"⏭️ 下一步：生成 {nxt}", key=f"next_{topic}"):
                 st.session_state.flow_index = next_idx
                 st.rerun()
-        return
 
+    # ---------- 2. 其餘頁面 ----------
     _render_export_result(topic)
-    
-    # 匯出和跳頁功能
+
     col_left, col_right = st.columns([1, 2])
 
+    # ===== 匯出 =====
     with col_left:
         if st.button("🚀 送出與下載", key=f"dl_{topic}"):
             st.session_state[f"show_download_options_{topic}"] = True
@@ -858,7 +835,6 @@ def _render_next_controls(topic: str):
                     if not pages:
                         st.warning("請至少選擇一個頁面！")
                     else:
-                        # 設置當前主題以便錯誤處理
                         st.session_state.current_topic = topic
                         try:
                             _invoke_export_lambda(pages, fmt)
@@ -866,9 +842,10 @@ def _render_next_controls(topic: str):
                             st.error(f"啟動匯出過程時發生錯誤: {e}")
                             logger.error(f"匯出啟動失敗: {e}")
 
+    # ===== 跳頁 =====
     with col_right:
         remaining = [
-            p for p in CHATBOT_FLOW[2:]
+            p for p in CHATBOT_FLOW[1:] # 只排除第 0 頁
             if p not in st.session_state.visited_pages or p == topic
         ]
         if remaining:
@@ -944,6 +921,8 @@ def show_chat_topic(topic: str) -> None:
 
 def main():
     header()
+    # st_autorefresh(interval=KEEPALIVE_MS, 
+    #                key="keepalive")
     initialization()
 
     if st.session_state.flow_index == -1:
