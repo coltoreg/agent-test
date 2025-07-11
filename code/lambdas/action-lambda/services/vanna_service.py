@@ -44,6 +44,9 @@ S3_MAX_RETRY = 2
 # 每次重試前靜默秒數
 S3_RETRY_SLEEP = 1.5
 
+
+
+
 class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
     """
     Vanna服務類，整合OpenSearch向量儲存和Bedrock對話能力，以及Athena連接
@@ -415,25 +418,100 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
 
             # ---------- 1. 取得 (df, sql, fig) ----------
             result, err = self.safe_execute(
-                self.ask, question=question.strip(), allow_llm_to_see_data=True
+                self.ask, 
+                question=question.strip(), 
+                allow_llm_to_see_data=True,
+                auto_train= False,
             )
+            print(f"result: {result}")
             if err or not result or len(result) < 3:
                 msg = err or "無有效結果"
                 logger.error(f"Vanna 回傳錯誤 / 格式不正確: {msg}")
                 return {"title_text": f"錯誤: {question[:30]}...", "img_html": None, "error": msg}
 
             fig = result[2]
+            print(f"fig是: {fig}")
             title_text = fig.layout.title.text if fig and fig.layout.title else f"圖表 {index+1}"
 
             # ---------- 2. 美化 layout ----------
             if fig:
+                title_font_family = "Noto Sans CJK TC Medium, Noto Sans CJK TC, sans-serif"
+                regular_font_family = "Noto Sans CJK TC Regular, Noto Sans CJK TC, sans-serif"
+                title_size_px = int(14 * 1.333)
+                label_size_px = int(9 * 1.333)
                 fig.update_layout(
                     margin=dict(l=40, r=20, t=60, b=120),
                     xaxis_tickangle=-45,
                     autosize=True,
-                )
+                    title=dict(
+                        font=dict(
+                            family=title_font_family,
+                            size=title_size_px,
+                            color="black"
+                        ),
+                        x=0.5,
+                        xanchor='center'
+                    ),
+                    font=dict(
+                        family=regular_font_family,
+                        size= label_size_px,
+                        color="black"
+                    ),
 
+                    xaxis=dict(
+                        title_font=dict(
+                            family=regular_font_family,
+                            size=label_size_px,
+                        ),
+                        tickfont=dict(
+                            family=regular_font_family,
+                            size=label_size_px,
+                        )
+                    ),
+                    yaxis=dict(
+                        title_font=dict(
+                            family=regular_font_family,
+                            size=label_size_px,
+                        ),
+                        tickfont=dict(
+                            family=regular_font_family,
+                            size=label_size_px,
+                        )
+                    ),
+                    legend=dict(
+                        font=dict(
+                            family=regular_font_family,
+                            size= label_size_px
+                        ),
+                        bgcolor="rgba(255, 255, 255, 0.8)",
+                        bordercolor="rgba(0, 0, 0, 0.2)",
+                        borderwidth=1
+                    ),
+
+                    plot_bgcolor='white',
+                    paper_bgcolor='white'
+                )
+                for trace in fig.data:
+                    if hasattr(trace, 'textfont'):
+                        trace.textfont = dict(
+                            family=regular_font_family,
+                            size=label_size_px,
+                            color="black"
+                        )
+                    if hasattr(trace, 'insidetextfont'):
+                        trace.insidetextfont = dict(
+                            family=regular_font_family,
+                            size=label_size_px,
+                            color="white"
+                        )
+                    if hasattr(trace, 'outsidetextfont'):
+                        trace.outsidetextfont = dict(
+                            family=regular_font_family,
+                            size=label_size_px,
+                            color="black"
+                        )
             img_url: Optional[str] = None
+
 
             # ---------- 3. 嘗試 PNG ----------
             if fig is not None:
@@ -670,7 +748,7 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                                     3.計算每個競爭品牌的總銷售額
                                     4.將{input_brand}單獨歸類
                                     5.非競爭品牌歸類為 "其他品牌"
-                                    6.結果適合用於製作圓餅圖
+                                    6.結果適合用於製作圓餅圖，圖不需要其他品牌
                                 3. 銷售額是 unit_price * quantity
                                 請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
                                 """]
@@ -712,7 +790,7 @@ class VannaService(OpenSearch_VectorStore, Bedrock_Converse):
                             #         3.計算每個競爭品牌的總銷售額
                             #         4.將{input_brand}單獨歸類
                             #         5.非競爭品牌歸類為 "其他品牌"
-                            #         6.結果適合用於製作圓餅圖
+                            #         6.結果適合用於製作圓餅圖，圖不需要其他品牌
                             #     3. 銷售額是 unit_price * quantity
                             #     請提供完整的 SQL 查詢語句，要確保 Query 裡面不會有特殊符號會導致 Query 失敗，Query 出來之後，再檢查一次 Query，確保可以直接在 AWS Athena 中執行。
                             #     """]
